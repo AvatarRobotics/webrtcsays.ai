@@ -82,6 +82,9 @@ rtc_desktop_capture_supported =
 ### Generate and build "direct" application 
 ```bash
 
+# Reset xcode to default version (optional)
+sudo xcode-select --reset
+
 # Generate WebRTC example "direct"
 gn gen out/debug --args="is_debug=true rtc_include_opus = true rtc_build_examples = true"
 
