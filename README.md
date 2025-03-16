@@ -49,6 +49,9 @@ make debug
 chmod +x ./third_party.sh
 ./third_party.sh # Options: -d for debug, -r for release, -c to clean
 
+# Copy espeak-ng voices
+sudo cp -r third_party/espeak-ng/espeak-ng-data /usr/local/share/
+
 # Go back to src
 cd ../../..
 
