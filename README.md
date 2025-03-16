@@ -22,7 +22,6 @@ solutions = [
 target_os = ["ios", "mac", "linux"]
 # eof .gclient
 
-gclient config https://github.com/wilddolphin2022/webrtcsays.ai.git
 gclient sync
 
 # Navigate to the source directory. Original directory can be cleaned up leave "src"
@@ -44,8 +43,11 @@ brew install automake
 chmod +x ./third_party.sh
 ./third_party.sh # Options: -d for debug, -r for release, -c to clean
 
+# Go back to src
+cd ../../..
+
 # For WebRTCsays.ai project, by default, we use "speech" enabled audio.
-# Set to false to disable in file webrtc.gni
+# Edit webrtc.gni and to true to enable "speech" audio
 rtc_use_speech_audio_devices = true
 ```
 ### Build macOS Deployment Target
