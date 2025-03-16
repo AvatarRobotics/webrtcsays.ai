@@ -36,13 +36,11 @@ git pull https://github.com/wilddolphin2022/WebRTCsays.ai main
 ### Build Scripts
 ```bash
 
-# Make build scripts executable and run them to get dependencies built
-chmod +x ./build-whillats.sh
-./build-whillats.sh # Options: -d for debug, -r for release, -c to clean
-
-or: cd modules/third_party
+# Make whillats (whisper, llama, tts) dependencies
+cd modules/third_party
 git clone https://github.com/wilddolphin2022/whillats
 cd whillats
+brew install automake
 chmod +x ./third_party.sh
 ./third_party.sh # Options: -d for debug, -r for release, -c to clean
 
