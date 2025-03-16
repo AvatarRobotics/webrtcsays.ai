@@ -55,7 +55,7 @@ rtc_use_speech_audio_devices = true
 
 # Check and set macOS deployment target for compatibility with Whisper and LLaMA
 # which demand macOS 14.0 minimum
-grep mac_deployment_target src/build/config/mac/mac_sdk.gni
+grep mac_deployment_target build/config/mac/mac_sdk.gni
 
 # Update deployment target if necessary
 perl -i -pe's/mac_deployment_target = "11.0"/mac_deployment_target = "14.0"/g' build/config/mac/mac_sdk.gni
@@ -66,7 +66,7 @@ perl -i -pe's/mac_deployment_target = "11.0"/mac_deployment_target = "15.0"/g' b
 perl -i -pe's/Master/Main/g' modules/audio_device/mac/audio_device_mac.cc
 
 # Remove obsolete Mac desktop capture code in webrtc.gni in case deployment target is more than 14.0
-# Find
+# Find in webrtc.gni
 rtc_desktop_capture_supported =
     (is_win && current_os != "winuwp") || is_mac ||
     ((is_linux || is_chromeos) && (rtc_use_x11_extensions || rtc_use_pipewire))
