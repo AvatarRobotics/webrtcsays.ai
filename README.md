@@ -39,7 +39,13 @@ git pull https://github.com/wilddolphin2022/WebRTCsays.ai main
 cd modules/third_party
 git clone https://github.com/wilddolphin2022/whillats
 cd whillats
-brew install automake
+
+brew install automake libtool # for pcaudiolib
+# Build whillats
+make
+make debug
+# you should see last line as "[100%] Built target test_whillats"
+
 chmod +x ./third_party.sh
 ./third_party.sh # Options: -d for debug, -r for release, -c to clean
 
@@ -59,8 +65,8 @@ grep mac_deployment_target build/config/mac/mac_sdk.gni
 
 # Update deployment target if necessary
 perl -i -pe's/mac_deployment_target = "11.0"/mac_deployment_target = "14.0"/g' build/config/mac/mac_sdk.gni
-# For Mac Mx machines
-perl -i -pe's/mac_deployment_target = "11.0"/mac_deployment_target = "15.0"/g' build/config/mac/mac_sdk.gni
+# **For Mac Mx machines**
+perl -i -pe's/mac_deployment_target = "11.0"/mac_deployment_target = "15.1"/g' build/config/mac/mac_sdk.gni
 
 # Modify audio device module for macOS if not yet
 perl -i -pe's/Master/Main/g' modules/audio_device/mac/audio_device_mac.cc
