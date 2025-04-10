@@ -104,7 +104,7 @@ inline void rtrim(std::string &s) {
 
 void ttsAudioCallback(bool success, const uint16_t* buffer, size_t buffer_size, void* user_data) {
   // Handle audio buffer here
-  RTC_LOG(LS_VERBOSE) << "Generated " << buffer_size << " audio samples at " << WhillatsTTS::getSampleRate() << "Hz";
+  RTC_LOG(LS_INFO) << "Generated " << buffer_size << " audio samples (" << buffer_size / 16000 << " s) at " << WhillatsTTS::getSampleRate() << "Hz";
   if(success) {
     WhisperAudioDevice* audio_device = static_cast<WhisperAudioDevice*>(user_data);
     audio_device->SetTTSBuffer(buffer, buffer_size);
@@ -283,8 +283,113 @@ int32_t WhisperAudioDevice::StopRecording() {
   return 0;
 }
 
-void WhisperAudioDevice::SetTTSBuffer(const uint16_t* buffer, size_t buffer_size) { 
-  _ttsBuffer = std::vector<uint16_t>(buffer, buffer + buffer_size); 
+// void WhisperAudioDevice::SetTTSBuffer(const uint16_t* buffer, size_t buffer_size) { 
+//   _ttsBuffer = std::vector<uint16_t>(buffer, buffer + buffer_size); 
+// }
+
+// bool WhisperAudioDevice::RecThreadProcess() {
+//   if (!_recording) {
+//     return false;
+//   }
+
+//   int64_t currentTime = rtc::TimeMillis();
+//   mutex_.Lock();
+
+//   // Check if it's time to process another 10ms chunk
+//   if (_lastCallRecordMillis == 0 || currentTime - _lastCallRecordMillis >= 10) {
+    
+//     // if transcribing, pop text
+//     bool shouldSynthesize = false;
+//     std::string textToSpeak;
+//     if(_tts && _ttsing) {
+//       std::unique_lock<std::mutex> lock(_queueMutex);
+//       if (!_textQueue.empty()) {
+//         textToSpeak = _textQueue.front();
+//         _textQueue.pop();
+//         shouldSynthesize = true;
+//       }
+//     }
+
+//     // If there's new text, send it for synthesis without checking buffer
+//     if (shouldSynthesize) {
+//       RTC_LOG(LS_INFO) << "TTS text: " << textToSpeak;
+//       _tts->queueText(textToSpeak.c_str());
+//     }
+
+//     // Handle audio buffer independently
+//     if (!_ttsBuffer.empty()) {
+//       // Add bounds checking
+//       if (_ttsIndex >= _ttsBuffer.size()) {
+//         RTC_LOG(LS_WARNING) << "TTS index out of bounds, resetting buffer";
+//         _ttsIndex = 0;
+//         _ttsBuffer.clear();
+//       } else {
+//         // Calculate remaining samples in buffer
+//         size_t remainingSamples = _ttsBuffer.size() - _ttsIndex;
+//         size_t samplesToCopy = std::min(_recordingFramesIn10MS, remainingSamples);
+        
+//         // Double check buffer sizes before copy
+//         if (samplesToCopy > 0 && _recordingBuffer != nullptr) {
+//           memcpy(_recordingBuffer, &_ttsBuffer[_ttsIndex], samplesToCopy * sizeof(short));
+//           _ttsIndex += samplesToCopy;
+
+//           // Fill the rest of _recordingBuffer with zeros if needed
+//           if (samplesToCopy < _recordingFramesIn10MS) {
+//             memset(_recordingBuffer + samplesToCopy * sizeof(short), 0, 
+//                    (_recordingFramesIn10MS - samplesToCopy) * sizeof(short));
+//           }
+
+//           mutex_.Unlock();
+//           _ptrAudioBuffer->SetRecordedBuffer(_recordingBuffer, _recordingFramesIn10MS);
+//           _ptrAudioBuffer->DeliverRecordedData();
+//           mutex_.Lock();
+
+//           // Reset buffer if we've processed all samples
+//           if (_ttsIndex >= _ttsBuffer.size()) {
+//             _ttsIndex = 0;
+//             _ttsBuffer.clear();
+//           }
+//         } else {
+//           RTC_LOG(LS_WARNING) << "Invalid buffer state, clearing TTS buffer";
+//           _ttsIndex = 0;
+//           _ttsBuffer.clear();
+//         }
+//       }
+//     } else {
+//       // If no audio to send, send silence
+//       if (_recordingBuffer != nullptr) {
+//         memset(_recordingBuffer, 0, _recordingFramesIn10MS * sizeof(short));
+//         mutex_.Unlock();
+//         _ptrAudioBuffer->SetRecordedBuffer(_recordingBuffer, _recordingFramesIn10MS);
+//         _ptrAudioBuffer->DeliverRecordedData();
+//         mutex_.Lock();
+//       }
+//     }
+
+//     _lastCallRecordMillis = currentTime;
+//   } else {
+//     // Pacing for the next 10ms chunk
+//     int64_t sleepTime = 10 - (rtc::TimeMillis() - currentTime);
+//     if (sleepTime > 0) {
+//       mutex_.Unlock();
+//       SleepMs(sleepTime);
+//       mutex_.Lock();
+//     }
+//   }
+
+//   mutex_.Unlock();
+//   return true;
+// }
+
+void WhisperAudioDevice::SetTTSBuffer(const uint16_t* buffer, size_t buffer_size) {
+  std::lock_guard<std::mutex> lock(_queueMutex);
+  if (!_ttsBuffer.empty() && _ttsIndex < _ttsBuffer.size()) {
+    RTC_LOG(LS_WARNING) << "TTS buffer still playing, delaying new buffer";
+    return; // Wait until current buffer is done
+  }
+  _ttsBuffer = std::vector<uint16_t>(buffer, buffer + buffer_size);
+  _ttsIndex = 0; // Reset index for new buffer
+  RTC_LOG(LS_INFO) << "Set new TTS buffer with " << buffer_size << " samples";
 }
 
 bool WhisperAudioDevice::RecThreadProcess() {
@@ -297,45 +402,23 @@ bool WhisperAudioDevice::RecThreadProcess() {
 
   // Check if it's time to process another 10ms chunk
   if (_lastCallRecordMillis == 0 || currentTime - _lastCallRecordMillis >= 10) {
-    
-    // if transcribing, pop text
-    bool shouldSynthesize = false;
-    std::string textToSpeak;
-    if(_tts && _ttsing) {
-      std::unique_lock<std::mutex> lock(_queueMutex);
-      if (!_textQueue.empty()) {
-        textToSpeak = _textQueue.front();
-        _textQueue.pop();
-        shouldSynthesize = true;
-      }
-    }
-
-    // If there's new text, send it for synthesis without checking buffer
-    if (shouldSynthesize) {
-      RTC_LOG(LS_INFO) << "TTS text: " << textToSpeak;
-      _tts->queueText(textToSpeak.c_str());
-    }
-
-    // Handle audio buffer independently
+    // Handle audio buffer playback
     if (!_ttsBuffer.empty()) {
-      // Add bounds checking
       if (_ttsIndex >= _ttsBuffer.size()) {
-        RTC_LOG(LS_WARNING) << "TTS index out of bounds, resetting buffer";
+        RTC_LOG(LS_INFO) << "Finished playing TTS buffer, resetting";
         _ttsIndex = 0;
         _ttsBuffer.clear();
       } else {
-        // Calculate remaining samples in buffer
         size_t remainingSamples = _ttsBuffer.size() - _ttsIndex;
         size_t samplesToCopy = std::min(_recordingFramesIn10MS, remainingSamples);
-        
-        // Double check buffer sizes before copy
+
         if (samplesToCopy > 0 && _recordingBuffer != nullptr) {
           memcpy(_recordingBuffer, &_ttsBuffer[_ttsIndex], samplesToCopy * sizeof(short));
           _ttsIndex += samplesToCopy;
 
-          // Fill the rest of _recordingBuffer with zeros if needed
+          // Fill remaining buffer with silence if needed
           if (samplesToCopy < _recordingFramesIn10MS) {
-            memset(_recordingBuffer + samplesToCopy * sizeof(short), 0, 
+            memset(_recordingBuffer + samplesToCopy * sizeof(short), 0,
                    (_recordingFramesIn10MS - samplesToCopy) * sizeof(short));
           }
 
@@ -343,26 +426,34 @@ bool WhisperAudioDevice::RecThreadProcess() {
           _ptrAudioBuffer->SetRecordedBuffer(_recordingBuffer, _recordingFramesIn10MS);
           _ptrAudioBuffer->DeliverRecordedData();
           mutex_.Lock();
-
-          // Reset buffer if we've processed all samples
-          if (_ttsIndex >= _ttsBuffer.size()) {
-            _ttsIndex = 0;
-            _ttsBuffer.clear();
-          }
-        } else {
-          RTC_LOG(LS_WARNING) << "Invalid buffer state, clearing TTS buffer";
-          _ttsIndex = 0;
-          _ttsBuffer.clear();
         }
       }
     } else {
-      // If no audio to send, send silence
-      if (_recordingBuffer != nullptr) {
-        memset(_recordingBuffer, 0, _recordingFramesIn10MS * sizeof(short));
-        mutex_.Unlock();
-        _ptrAudioBuffer->SetRecordedBuffer(_recordingBuffer, _recordingFramesIn10MS);
-        _ptrAudioBuffer->DeliverRecordedData();
-        mutex_.Lock();
+      // Only process new text when current audio is finished
+      bool shouldSynthesize = false;
+      std::string textToSpeak;
+      if (_tts && _ttsing) {
+        std::unique_lock<std::mutex> lock(_queueMutex);
+        if (!_textQueue.empty()) {
+          textToSpeak = _textQueue.front();
+          _textQueue.pop();
+          shouldSynthesize = true;
+          RTC_LOG(LS_INFO) << "Popped text: " << textToSpeak << ", Remaining queue size: " << _textQueue.size();
+        }
+      }
+
+      if (shouldSynthesize) {
+        RTC_LOG(LS_INFO) << "Queueing TTS text: " << textToSpeak;
+        _tts->queueText(textToSpeak.c_str());
+      } else {
+        // Send silence if no audio or text is available
+        if (_recordingBuffer != nullptr) {
+          memset(_recordingBuffer, 0, _recordingFramesIn10MS * sizeof(short));
+          mutex_.Unlock();
+          _ptrAudioBuffer->SetRecordedBuffer(_recordingBuffer, _recordingFramesIn10MS);
+          _ptrAudioBuffer->DeliverRecordedData();
+          mutex_.Lock();
+        }
       }
     }
 
