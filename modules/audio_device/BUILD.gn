@@ -525,7 +525,7 @@ if (!build_with_chromium) {
       defines += [ "WEBRTC_SPEECH_DEVICES" ]
     }
     include_dirs = [
-      "../third_party/whillats/src",
+      "//modules/third_party/whillats/src",
     ]
     if(is_mac) {
       frameworks = [
@@ -533,10 +533,40 @@ if (!build_with_chromium) {
         "Metal.framework",
         "MetalKit.framework",
       ]
+      lib_dirs = [ "//modules/third_party/whillats/build/bin" ]
+      libs = [ "whillats" ]
     } else {
-      libs += [ 
-        "gomp",
-        "stdc++"
+      if(!is_ios) {
+        libs += [
+          "gomp",
+          "stdc++"
+        ]
+      }
+    }
+    if (is_ios) {
+      # Add Whillats sources
+      include_dirs += [
+        "//modules/third_party/whillats/third_party/whisper.cpp/include",
+        "//modules/third_party/whillats/third_party/llama.cpp/include",
+        "//modules/third_party/whillats/third_party/llama.cpp/ggml/include",
+      ]
+      sources += [
+        "//modules/third_party/whillats/src/whillats.h",
+        "//modules/third_party/whillats/src/whillats.cc",
+        "//modules/third_party/whillats/src/whisper_transcription.h",
+        "//modules/third_party/whillats/src/whisper_transcription.cc",
+        "//modules/third_party/whillats/src/llama_device_base.h",
+        "//modules/third_party/whillats/src/llama_device_base.cc",
+      ]
+      # Add paths containing the XCFrameworks
+      framework_dirs = [
+        "//modules/third_party/whillats/third_party/whisper.cpp/build-ios-device/framework",
+        "//modules/third_party/whillats/third_party/llama.cpp/build-ios-device/framework",
+      ]
+      # Add the framework names (must end with .framework extension)
+      frameworks = [
+        "whisper.framework",
+        "llama.framework",
       ]
     }
     cflags += [ "-std=c++11", "-Wno-incompatible-pointer-types-discards-qualifiers" ] 
