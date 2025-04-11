@@ -37,9 +37,21 @@
 #include "rtc_base/ref_counted_object.h"
 #include "rtc_base/rtc_certificate_generator.h"
 
+// Function to parse IP address and port from a string in the format "IP:PORT"
+bool ParseIpAndPort(const std::string& ip_port, std::string& ip, int& port);
+
+// String split
+std::vector<std::string> stringSplit(std::string input, std::string delimiter);
+
+// Function to create a self-signed certificate
+rtc::scoped_refptr<rtc::RTCCertificate> CreateCertificate();
+
+// Function to load a certificate from PEM files
+rtc::scoped_refptr<rtc::RTCCertificate> LoadCertificate(const std::string& cert_path, const std::string& key_path);
+
 // Command line options
 struct Options {
-    bool is_caller = false; 
+    std::string mode = "caller"; // default to caller if not specified
     bool encryption = true;
     bool whisper = true;
     bool video = false;
@@ -50,25 +62,16 @@ struct Options {
     std::string webrtc_cert_path = "cert.pem";
     std::string webrtc_key_path = "key.pem";
     std::string webrtc_speech_initial_playout_wav = "play.wav";
-    std::string ip = "127.0.0.1";
-    int port = 3456;
+    std::string address = "";
+    std::string turns = "";
+    std::string vpn = "";
 };
+
+// Function to load certificate from environment variables or fall back to CreateCertificate
+rtc::scoped_refptr<rtc::RTCCertificate> LoadCertificateFromEnv(Options opts);
 
 // Function to parse command line string to above options
 Options parseOptions(int argc, char* argv[]);
 
 // Function to get command line options to a string, to print or speak
 std::string getUsage(const Options opts);
-
-// Function to parse IP address and port from a string in the format "IP:PORT"
-bool ParseIpAndPort(const std::string& ip_port, std::string& ip, int& port);
-
-// Function to create a self-signed certificate
-rtc::scoped_refptr<rtc::RTCCertificate> CreateCertificate();
-
-// Function to load a certificate from PEM files
-rtc::scoped_refptr<rtc::RTCCertificate> LoadCertificate(const std::string& cert_path, const std::string& key_path);
-
-// Function to load certificate from environment variables or fall back to CreateCertificate
-rtc::scoped_refptr<rtc::RTCCertificate> LoadCertificateFromEnv(Options opts);
-

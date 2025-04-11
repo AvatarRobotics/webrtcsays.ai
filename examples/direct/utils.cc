@@ -1,5 +1,5 @@
 /*
- *  (c) 2025, wilddolphin2022 
+ *  (c) 2025, wilddolphin2022
  *  For WebRTCsays.ai project
  *  https://github.com/wilddolphin2022
  *
@@ -13,37 +13,51 @@
 #include "utils.h"
 
 #if defined(WEBRTC_LINUX)
-extern "C" { void __libc_csu_init() {} void __libc_csu_fini() {} }
+extern "C" {
+void __libc_csu_init() {}
+void __libc_csu_fini() {}
+}
 #endif
 
 // Function to parse IP address and port from a string in the format "IP:PORT"
 bool ParseIpAndPort(const std::string& ip_port, std::string& ip, int& port) {
-    size_t colon_pos = ip_port.find(':');
-    if (colon_pos == std::string::npos) {
-        RTC_LOG(LS_ERROR) << "Invalid IP:PORT format: " << ip_port;
-        return false;
+  size_t colon_pos = ip_port.find(':');
+  if (colon_pos == std::string::npos) {
+    RTC_LOG(LS_ERROR) << "Invalid IP:PORT format: " << ip_port;
+    return false;
+  }
+
+  ip = ip_port.substr(0, colon_pos);
+  std::string port_str = ip_port.substr(colon_pos + 1);
+  port = std::stoi(port_str);
+
+  if (port < 0 || port > 65535) {
+    RTC_LOG(LS_ERROR) << "Invalid port: " << port;
+    return false;
+  }
+
+  return true;
+}
+
+std::vector<std::string> stringSplit(std::string input, std::string delimiter)
+{
+    std::vector<std::string> tokens;
+    size_t pos = 0;
+    std::string token;
+
+    while((pos = input.find(delimiter)) != std::string::npos){
+        token = input.substr(0, pos);
+        tokens.push_back(token);
+        input.erase(0, pos + 1);
     }
 
-    ip = ip_port.substr(0, colon_pos);
-    if(ip.empty()) ip = "127.0.0.1";
-    std::string port_str = ip_port.substr(colon_pos + 1);
-    if(port_str.empty()) 
-        port_str =  std::to_string(port);
-    else      
-        port = std::stoi(port_str);
-
-    if (port < 0 || port > 65535) {
-        RTC_LOG(LS_ERROR) << "Invalid port: " << port;
-        return false;
-    }
-
-    return true;
+    tokens.push_back(input);
+    return tokens;
 }
 
 // Function to create a self-signed certificate
-
 rtc::scoped_refptr<rtc::RTCCertificate> CreateCertificate() {
-  auto key_params = rtc::KeyParams::RSA(2048); // Use RSA with 2048-bit key
+  auto key_params = rtc::KeyParams::RSA(2048);  // Use RSA with 2048-bit key
   auto identity = rtc::SSLIdentity::Create("webrtc", key_params);
   if (!identity) {
     RTC_LOG(LS_ERROR) << "Failed to create SSL identity";
@@ -51,7 +65,6 @@ rtc::scoped_refptr<rtc::RTCCertificate> CreateCertificate() {
   }
   return rtc::RTCCertificate::Create(std::move(identity));
 }
-
 
 // Function to read a file into a string
 std::string ReadFile(const std::string& path) {
@@ -66,7 +79,9 @@ std::string ReadFile(const std::string& path) {
 }
 
 // Function to load a certificate from PEM files
-rtc::scoped_refptr<rtc::RTCCertificate> LoadCertificate(const std::string& cert_path, const std::string& key_path) {
+rtc::scoped_refptr<rtc::RTCCertificate> LoadCertificate(
+    const std::string& cert_path,
+    const std::string& key_path) {
   // Read the certificate and key files
   std::string cert_pem = ReadFile(cert_path);
   std::string key_pem = ReadFile(key_path);
@@ -90,161 +105,174 @@ rtc::scoped_refptr<rtc::RTCCertificate> LoadCertificate(const std::string& cert_
   return rtc::RTCCertificate::Create(std::move(identity));
 }
 
-// Function to load certificate from environment variables or fall back to CreateCertificate
+// Function to load certificate from environment variables or fall back to
+// CreateCertificate
 rtc::scoped_refptr<rtc::RTCCertificate> LoadCertificateFromEnv(Options opts) {
   // Get paths from environment variables
-  const char* cert_path = opts.webrtc_cert_path.empty() ? std::getenv("WEBRTC_CERT_PATH") : opts.webrtc_cert_path.c_str();
-  const char* key_path = opts.webrtc_key_path.empty() ? std::getenv("WEBRTC_KEY_PATH") : opts.webrtc_key_path.c_str();
+  const char* cert_path = opts.webrtc_cert_path.empty()
+                              ? std::getenv("WEBRTC_CERT_PATH")
+                              : opts.webrtc_cert_path.c_str();
+  const char* key_path = opts.webrtc_key_path.empty()
+                             ? std::getenv("WEBRTC_KEY_PATH")
+                             : opts.webrtc_key_path.c_str();
 
   if (cert_path && key_path) {
-    RTC_LOG(LS_INFO) << "Loading certificate from " << cert_path << " and " << key_path;
+    RTC_LOG(LS_INFO) << "Loading certificate from " << cert_path << " and "
+                     << key_path;
     auto certificate = LoadCertificate(cert_path, key_path);
     if (certificate) {
       return certificate;
     }
-    RTC_LOG(LS_WARNING) << "Failed to load certificate from files; falling back to CreateCertificate";
+    RTC_LOG(LS_WARNING) << "Failed to load certificate from files; falling "
+                           "back to CreateCertificate";
   } else {
-    RTC_LOG(LS_WARNING) << "Environment variables WEBRTC_CERT_PATH and WEBRTC_KEY_PATH not set; falling back to CreateCertificate";
+    RTC_LOG(LS_WARNING)
+        << "Environment variables WEBRTC_CERT_PATH and WEBRTC_KEY_PATH not "
+           "set; falling back to CreateCertificate";
   }
 
   // Fall back to CreateCertificate
   return CreateCertificate();
 }
 
+// Function to parse command line string to above options
 Options parseOptions(int argc, char* argv[]) {
-    Options opts;
-    // Initialize defaults
-    opts.encryption = false;
-    opts.whisper = false;
-    opts.is_caller = false;
-    opts.webrtc_cert_path = "cert.pem";
-    opts.webrtc_key_path = "key.pem";
-    opts.webrtc_speech_initial_playout_wav = "play.wav";
-    opts.help = false;
-    opts.help_string = "Usage:\n"
-        "direct [options] [address] [options]\n\n"
-        "Options:\n"
-        "  --mode <caller|callee>              Set operation mode (default: caller)\n"
-        "  --encryption, --no-encryption       Enable/disable encryption (default: disabled)\n"
-        "  --whisper, --no-whisper            Enable/disable whisper (default: disabled)\n"
-        "  --whisper_model=<path>             Path to whisper model\n"
-        "  --llama_model=<path>               Path to llama model\n"
-        "  --webrtc_cert_path=<path>          Path to WebRTC certificate (default: cert.pem)\n"
-        "  --webrtc_key_path=<path>           Path to WebRTC key (default: key.pem)\n"
-        "  --help                             Show this help message\n"
-        "\nExamples:\n"
-        "  direct --mode=caller 192.168.1.100:3478 --encryption\n"
-        "  direct --mode=callee :3478 --no-encryption\n"
-        "  direct 192.168.1.100:3478 --encryption --whisper --whisper_model=model.bin\n";
+  Options opts;
+  // Initialize defaults
+  opts.encryption = false;
+  opts.whisper = false;
+  opts.mode = "";
+  opts.webrtc_cert_path = "cert.pem";
+  opts.webrtc_key_path = "key.pem";
+  opts.webrtc_speech_initial_playout_wav = "play.wav";
+  opts.help = false;
+  opts.help_string =
+      "Usage:\n"
+      "direct [options] address [options]\n\n"
+      "Options:\n"
+      "  --mode <caller|callee>             Set operation mode (default: caller)\n"
+      "  --encryption, --no-encryption      Enable/disable encryption (default: disabled)\n"
+      "  --whisper, --no-whisper            Enable/disable whisper (default: no-whisper)\n"
+      "  --whisper_model=<path>             Path to whisper model\n"
+      "  --llama_model=<path>               Path to llama model\n"
+      "  --webrtc_cert_path=<path>          Path to WebRTC certificate (default: 'cert.pem')\n"
+      "  --webrtc_key_path=<path>           Path to WebRTC key (default: 'key.pem')\n"
+      "  --turns=<ip,username,password>     Secured turn server address, e.g. \n"
+      "   'turns:global.relay.metered.ca:443?transport=tcp,<username>,<password>'\n"
+      "  --help                             Show this help message\n\n"
+      "\nExamples (callee called first, encryption is recommended):\n"
+      "  direct --mode=callee :3478 --no-encryption\n"
+      "  direct --mode=callee 192.168.1.100:3478 --encryption --whisper"
+      "--whisper_model=/path/to/model.bin --llama_model=/path/to/llama.gguf\n\n"
+      "  direct --mode=caller 192.168.1.100:3478 --encryption\n"
+      ;
 
-    // Helper function to check if string is an address
-    auto isAddress = [](const std::string& str) {
-        return str.find(':') != std::string::npos && 
-               (str.find('.') != std::string::npos || str[0] == ':');
-    };
+  // Helper function to check if string is an address
+  auto isAddress = [](const std::string& str) {
+    return str.find(':') != std::string::npos &&
+           (str.find('.') != std::string::npos || str[0] == ':');
+  };
 
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
 
-        // Handle parameters with values
-        if (arg.find("--mode=") == 0) {
-            std::string mode = arg.substr(7);
-            if(mode == "caller")
-                opts.is_caller = true;
-            else if(mode == "callee")
-                opts.is_caller = false;
-        } else if (arg == "--encryption") {
-            opts.encryption = true;
-        } else if (arg == "--whisper") {
-            opts.whisper = true;
-        } else if (arg.find("--whisper_model=") == 0) {
-            opts.whisper_model = arg.substr(16);  // Length of "-whisper_model="
-            RTC_LOG(LS_INFO) << "Whisper model path: " << opts.whisper_model;
-            if(!opts.whisper) opts.whisper = true;
-        } else if (arg.find("--llama_model=") == 0) {
-            opts.llama_model = arg.substr(14);  // Length of "-llama_model="
-            RTC_LOG(LS_INFO) << "LLAMA model path: " << opts.llama_model;
-        } else if (arg.find("--webrtc_cert_path=") == 0) {
-            opts.webrtc_cert_path = arg.substr(19);
-        }
-        else if (arg.find("--webrtc_key_path=") == 0) {
-            opts.webrtc_key_path = arg.substr(18);
-        }
-        else if (arg.find("--webrtc_speech_initial_playout_wav=") == 0) {
-            opts.webrtc_speech_initial_playout_wav = arg.substr(36);
-        }
-        // Handle flags
-        else if (arg == "--help") {
-            opts.help = true;
-        }
-        else if (arg == "--encryption") {
-            opts.encryption = true;
-        }
-        else if (arg == "--no-encryption") {
-            opts.encryption = false;
-        }
-        else if (arg == "--whisper") {
-            opts.whisper = true;
-        }
-        else if (arg == "--no-whisper") {
-            opts.whisper = false;
-        } 
-        else if (arg == "--video") {
-            opts.video = true;
-        }
-        else if (arg == "--no-video") {
-            opts.video = false;
-        }
-        // Handle address in any position
-        else if (isAddress(arg)) {
-            std::string address = arg;
-            opts.ip = "127.0.0.1";
-            opts.port = 3456;
-            if (!ParseIpAndPort(address, opts.ip, opts.port)) {
-                RTC_LOG(LS_ERROR) << "address:port combo is invalid";
-
-            }
-        }
+    // Handle parameters with values
+    if (arg.find("--mode=") == 0) {
+      opts.mode = arg.substr(7);
+    } else if (arg == "--encryption") {
+      opts.encryption = true;
+    } else if (arg == "--whisper") {
+      opts.whisper = true;
+    } else if (arg.find("--whisper_model=") == 0) {
+      opts.whisper_model = arg.substr(16);  // Length of "-whisper_model="
+      RTC_LOG(LS_INFO) << "Whisper model path: " << opts.whisper_model;
+      if (!opts.whisper)
+        opts.whisper = true;
+    } else if (arg.find("--llama_model=") == 0) {
+      opts.llama_model = arg.substr(14);  // Length of "-llama_model="
+      RTC_LOG(LS_INFO) << "LLAMA model path: " << opts.llama_model;
+    } else if (arg.find("--webrtc_cert_path=") == 0) {
+      opts.webrtc_cert_path = arg.substr(19);
+    } else if (arg.find("--webrtc_key_path=") == 0) {
+      opts.webrtc_key_path = arg.substr(18);
+    } else if (arg.find("--webrtc_speech_initial_playout_wav=") == 0) {
+      opts.webrtc_speech_initial_playout_wav = arg.substr(36);
+    } else if (arg.find("--turns=") == 0) {
+      opts.turns = arg.substr(8);
+      // Remove single quotes
+      opts.turns.erase(remove(opts.turns.begin(), opts.turns.end(), '\'' ), opts.turns.end());
     }
+    // Handle flags
+    else if (arg == "--help") {
+      opts.help = true;
+    } else if (arg == "--encryption") {
+      opts.encryption = true;
+    } else if (arg == "--no-encryption") {
+      opts.encryption = false;
+    } else if (arg == "--whisper") {
+      opts.whisper = true;
+    } else if (arg == "--no-whisper") {
+      opts.whisper = false;
+    }
+    // Handle address in any position
+    else if (isAddress(arg)) {
+      opts.address = arg;
+      // Only guess mode if not explicitly set
+      if (opts.mode.empty()) {
+        opts.mode = (arg.find('.') == std::string::npos) ? "callee" : "caller";
+      }
+    }
+  }
 
-    // Load environment variables if paths not provided
-    if(opts.webrtc_cert_path.empty()) {
+  // Load environment variables if paths not provided
+  if (opts.webrtc_cert_path.empty()) {
     if (const char* env_cert = std::getenv("WEBRTC_CERT_PATH")) {
-        opts.webrtc_cert_path = env_cert;
-    }}
-    if(opts.webrtc_key_path.empty()) {
+      opts.webrtc_cert_path = env_cert;
+    }
+  }
+  if (opts.webrtc_key_path.empty()) {
     if (const char* env_key = std::getenv("WEBRTC_KEY_PATH")) {
-        opts.webrtc_key_path = env_key;
-    }}
-    if(opts.webrtc_speech_initial_playout_wav.empty()) {
-    if (const char* env_wav = std::getenv("WEBRTC_SPEECH_INITIAL_PLAYOUT_WAV")) {
-        opts.webrtc_speech_initial_playout_wav = env_wav;
-    }}
-    if(opts.whisper_model.empty()) {
+      opts.webrtc_key_path = env_key;
+    }
+  }
+  if (opts.webrtc_speech_initial_playout_wav.empty()) {
+    if (const char* env_wav =
+            std::getenv("WEBRTC_SPEECH_INITIAL_PLAYOUT_WAV")) {
+      opts.webrtc_speech_initial_playout_wav = env_wav;
+    }
+  }
+  if (opts.whisper_model.empty()) {
     if (const char* env_whisper = std::getenv("WHISPER_MODEL")) {
-        opts.whisper_model = env_whisper;
-    }}
-    if(opts.llama_model.empty()) {
-    if (const char* env_llama = std::getenv("LLAMA_MODEL")) {
-        opts.llama_model = env_llama;
-    }}
+      opts.whisper_model = env_whisper;
+    }
+  } else {
+    setenv("WHISPER_MODEL", opts.whisper_model.c_str(), true);
+  }
 
-    return opts;
+  if (opts.llama_model.empty()) {
+    if (const char* env_llama = std::getenv("LLAMA_MODEL")) {
+      opts.llama_model = env_llama;
+    }
+  } else {
+    setenv("LLAMA_MODEL", opts.llama_model.c_str(), true);
+  }
+
+  return opts;
 }
 
 std::string getUsage(const Options opts) {
   std::stringstream usage;
 
-  usage << "\nMode: " << (opts.is_caller ? "caller" : "callee") << "\n"; 
+  usage << "\nMode: " << opts.mode << "\n";
   usage << "Encryption: " << (opts.encryption ? "enabled" : "disabled") << "\n";
   usage << "Whisper: " << (opts.whisper ? "enabled" : "disabled") << "\n";
-  usage << "Video: " << (opts.video ? "enabled" : "disabled") << "\n";
   usage << "Whisper Model: " << opts.whisper_model << "\n";
   usage << "Llama Model: " << opts.llama_model << "\n";
   usage << "WebRTC Cert Path: " << opts.webrtc_cert_path << "\n";
   usage << "WebRTC Key Path: " << opts.webrtc_key_path << "\n";
-  usage << "WebRTC Speech Initial Playout WAV: " << opts.webrtc_speech_initial_playout_wav << "\n";
-  usage << "IP Address: " << opts.ip << "\n";
-  usage << "Port: " << opts.port << "\n";
+  usage << "WebRTC Speech Initial Playout WAV: "
+        << opts.webrtc_speech_initial_playout_wav << "\n";
+  usage << "IP Address: " << opts.address << "\n";
+
   return usage.str();
 }

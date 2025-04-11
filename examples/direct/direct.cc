@@ -11,11 +11,18 @@
  */
 
 #include "direct.h"
-
 #include "utils.h"
+#include "rtc_base/network.h"
+#include "rtc_base/ip_address.h"
+
+rtc::IPAddress IPFromString(absl::string_view str) {
+  rtc::IPAddress ip;
+  RTC_CHECK(rtc::IPFromString(str, &ip));
+  return ip;
+}
 
 // DirectApplication Implementation
-DirectApplication::DirectApplication(Options opts) : opts_(opts) {
+DirectApplication::DirectApplication() {
   pss_ = std::make_unique<rtc::PhysicalSocketServer>();
 
   main_thread_ = rtc::Thread::CreateWithSocketServer();
@@ -27,6 +34,8 @@ DirectApplication::DirectApplication(Options opts) : opts_(opts) {
   signaling_thread_ = rtc::Thread::Create();
   network_thread_ = std::make_unique<rtc::Thread>(pss_.get());
   network_thread_->socketserver()->SetMessageQueue(network_thread_.get());
+
+  peer_connection_factory_ = nullptr;
 }
 
 void DirectApplication::CleanupSocketServer() {
@@ -52,6 +61,10 @@ void DirectApplication::CleanupSocketServer() {
     main_thread_->UnwrapCurrent();
     main_thread_.reset();
   }
+
+  // Clear remaining members
+  network_manager_.reset();
+  socket_factory_.reset();
 }
 
 void DirectApplication::Run() {
@@ -74,6 +87,7 @@ void DirectApplication::Run() {
 
   // Final cleanup
   CleanupSocketServer();
+  
 }
 
 DirectApplication::~DirectApplication() {
@@ -91,22 +105,234 @@ bool DirectApplication::Initialize() {
   return true;
 }
 
-bool DirectApplication::CheckConnection(rtc::AsyncPacketSocket* socket) {
-  if (!socket ||
-      socket->GetState() != rtc::AsyncPacketSocket::STATE_CONNECTED) {
-    HandleDisconnect();
-    return false;
+bool DirectApplication::CreatePeerConnection(Options opts_) {
+
+  RTC_LOG(LS_INFO) << "Creating peer connection";
+
+  if (peer_connection_) {
+      peer_connection_->Close();
+      peer_connection_ = nullptr;
+    }
+    peer_connection_factory_ = nullptr;
+
+  // Create/get certificate if needed
+  if (opts_.encryption && !certificate_) {
+    certificate_ = LoadCertificateFromEnv(opts_);
+    certificate_stats_ = certificate_->GetSSLCertificate().GetStats();
+    RTC_LOG(LS_INFO) << "Using certificate with fingerprint: "
+                      << certificate_stats_->fingerprint << " and algorithm: "
+                      << certificate_stats_->fingerprint_algorithm;
   }
+
+  // Create a single task queue factory that will be used consistently
+  std::unique_ptr<webrtc::TaskQueueFactory> task_queue_factory = 
+      webrtc::CreateDefaultTaskQueueFactory();
+  
+  // Store the raw pointer for logging
+  webrtc::TaskQueueFactory* task_queue_factory_ptr = task_queue_factory.get();
+  
+  // Create audio task queue - this will be used for audio operations
+  audio_task_queue_ = task_queue_factory->CreateTaskQueue(
+      "AudioTaskQueue", webrtc::TaskQueueFactory::Priority::NORMAL);
+  
+  RTC_LOG(LS_INFO) << "Created TaskQueueFactory: " << task_queue_factory_ptr
+                  << " and AudioTaskQueue: " << audio_task_queue_.get();
+
+  // Task queue factory setup
+  dependencies_.network_thread = network_thread();
+  dependencies_.worker_thread = worker_thread();
+  dependencies_.signaling_thread = signaling_thread();
+
+  // Audio device module type
+  webrtc::AudioDeviceModule::AudioLayer kAudioDeviceModuleType = webrtc::AudioDeviceModule::kPlatformDefaultAudio;
+#ifdef WEBRTC_SPEECH_DEVICES
+  if (opts_.whisper) {
+    kAudioDeviceModuleType = webrtc::AudioDeviceModule::kSpeechAudio;
+  }
+#endif // WEBRTC_SPEECH_DEVICES
+
+  rtc::Event adm_created;
+  audio_device_module_ = nullptr;
+  dependencies_.worker_thread->PostTask([this, kAudioDeviceModuleType, task_queue_factory_ptr, &adm_created]() {
+      audio_device_module_ = webrtc::AudioDeviceModule::Create(
+        kAudioDeviceModuleType,
+        task_queue_factory_ptr
+      );
+      if (audio_device_module_) {
+          RTC_LOG(LS_INFO) << "Audio device module created successfully on thread: " << rtc::Thread::Current();
+          // No need to call Init() here; CreatePeerConnectionFactory will do it
+      } else {
+          RTC_LOG(LS_ERROR) << "Failed to create audio device module";
+      }
+      adm_created.Set();
+  });
+
+  // Wait for ADM creation to complete
+  adm_created.Wait(webrtc::TimeDelta::Seconds(1));
+  if (!audio_device_module_) {
+      RTC_LOG(LS_ERROR) << "Audio device module creation failed after task execution";
+      return false;
+  }
+
+  dependencies_.adm = audio_device_module_;
+  dependencies_.task_queue_factory = std::move(task_queue_factory);
+
+  // PeerConnectionFactory creation
+  peer_connection_factory_ = webrtc::CreatePeerConnectionFactory(
+      dependencies_.network_thread,
+      dependencies_.worker_thread,
+      dependencies_.signaling_thread,
+      dependencies_.adm,
+      webrtc::CreateBuiltinAudioEncoderFactory(),
+      webrtc::CreateBuiltinAudioDecoderFactory(),
+      opts_.video ? std::make_unique<webrtc::VideoEncoderFactoryTemplate<
+          webrtc::LibvpxVp8EncoderTemplateAdapter,
+          webrtc::LibvpxVp9EncoderTemplateAdapter,
+          webrtc::OpenH264EncoderTemplateAdapter,
+          webrtc::LibaomAv1EncoderTemplateAdapter>>() : nullptr,
+      opts_.video ? std::make_unique<webrtc::VideoDecoderFactoryTemplate<
+          webrtc::LibvpxVp8DecoderTemplateAdapter,
+          webrtc::LibvpxVp9DecoderTemplateAdapter,
+          webrtc::OpenH264DecoderTemplateAdapter,
+          webrtc::Dav1dDecoderTemplateAdapter>>() : nullptr,
+      nullptr, nullptr);
+
+  webrtc::PeerConnectionInterface::RTCConfiguration config;
+  config.sdp_semantics = webrtc::SdpSemantics::kUnifiedPlan;
+  webrtc::PeerConnectionFactory::Options options = {};
+  if(opts_.encryption) {
+      RTC_LOG(LS_INFO) << "Encryption is enabled!";
+      auto certificate = LoadCertificateFromEnv(opts_);
+      config.certificates.push_back(certificate);
+  } else {
+      // WARNING! FOLLOWING CODE IS FOR DEBUG ONLY!
+      options.disable_encryption = true;
+      peer_connection_factory_->SetOptions(options);
+      // END OF WARNING
+  }
+
+  config.type = webrtc::PeerConnectionInterface::IceTransportsType::kAll;
+  // Only set essential ICE configs
+  config.bundle_policy = webrtc::PeerConnectionInterface::kBundlePolicyMaxBundle;
+  config.rtcp_mux_policy = webrtc::PeerConnectionInterface::kRtcpMuxPolicyRequire;
+  
+  // Simple, reliable intervals
+  config.ice_connection_receiving_timeout = 30000;  // 30 seconds instead of default 15
+  config.ice_check_min_interval = 200;             // More frequent checks
+  config.ice_check_interval_strong_connectivity = 1000;  // Check every second when connected
+  config.ice_backup_candidate_pair_ping_interval = 2500; // Keep backup pairs alive
+
+  cricket::ServerAddresses stun_servers;
+  std::vector<cricket::RelayServerConfig> turn_servers;
+
+  if(opts_.turns.size()) {
+   std::vector<std::string> turnsParams = stringSplit(opts_.turns, ",");
+   if(turnsParams.size() == 3) {
+      webrtc::PeerConnectionInterface::IceServer iceServer;
+      iceServer.uri = turnsParams[0];
+      iceServer.username = turnsParams[1];
+      iceServer.password = turnsParams[2];
+      config.servers.push_back(iceServer);
+    }
+  }
+
+  webrtc::PeerConnectionInterface::IceServer stun_server;
+  stun_server.uri = "stun:stun.l.google.com:19302";
+  config.servers.push_back(stun_server);
+
+  for (const auto& server : config.servers) {
+      if (server.uri.find("stun:") == 0) {
+          std::string host_port = server.uri.substr(5);
+          size_t colon_pos = host_port.find(':');
+          if (colon_pos != std::string::npos) {
+              std::string host = host_port.substr(0, colon_pos);
+              int port = std::stoi(host_port.substr(colon_pos + 1));
+              stun_servers.insert(rtc::SocketAddress(host, port));
+          }
+      } else if (server.uri.find("turn:") == 0) {
+          std::string host_port = server.uri.substr(5);
+          size_t colon_pos = host_port.find(':');
+          if (colon_pos != std::string::npos) {
+              cricket::RelayServerConfig turn_config;
+              turn_config.credentials = cricket::RelayCredentials(server.username, server.password);
+              turn_config.ports.push_back(cricket::ProtocolAddress(
+                  rtc::SocketAddress(
+                      host_port.substr(0, colon_pos),
+                      std::stoi(host_port.substr(colon_pos + 1))),
+                  cricket::PROTO_UDP));
+              turn_servers.push_back(turn_config);
+          }
+      }
+  }
+
+  RTC_LOG(LS_INFO) << "Configured STUN/TURN servers:";
+  for (const auto& addr : stun_servers) {
+      RTC_LOG(LS_INFO) << "  STUN Server: " << addr.ToString();
+  }
+  for (const auto& turn : turn_servers) {
+      for (const auto& addr : turn.ports) {
+          RTC_LOG(LS_INFO) << "  TURN Server: " << addr.address.ToString()
+                            << " (Protocol: " << addr.proto << ")";
+      }
+  }
+
+  // Ensure packet socket factory exists (used for port allocator later)
+  if (!socket_factory_) {
+    socket_factory_ = std::make_unique<rtc::BasicPacketSocketFactory>(pss());
+  }
+  // Recreate network manager if needed, passing the PhysicalSocketServer (which is a SocketFactory)
+  if (!network_manager_) {
+    // Pass pss() which returns the PhysicalSocketServer*, a valid SocketFactory*
+    network_manager_ = std::make_unique<rtc::BasicNetworkManager>(pss());
+  }
+
+  // Add VPN list to ignore
+  if(vpns_.size()) {
+    for(auto vpn : vpns_) {
+      std::string vpn_ip = vpn;
+      rtc::NetworkMask vpn_mask(IPFromString(vpn_ip), 32);
+      network_manager_->set_vpn_list({vpn_mask});
+      network_manager_->set_network_ignore_list({vpn_ip});
+      network_manager_->StartUpdating();
+    }
+  }
+
+  auto port_allocator = std::make_unique<cricket::BasicPortAllocator>(
+      network_manager_.get(), socket_factory_.get());
+  RTC_DCHECK(port_allocator.get());    
+
+  port_allocator->SetConfiguration(
+      stun_servers,
+      turn_servers,
+      0,  // Keep this as 0
+      webrtc::PeerConnectionInterface::ContinualGatheringPolicy::GATHER_CONTINUALLY,
+      nullptr,
+      std::nullopt
+  );
+
+  // Allow flexible port allocation for UDP
+  uint32_t flags = 0;
+  flags |= cricket::PORTALLOCATOR_ENABLE_ANY_ADDRESS_PORTS; 
+
+  port_allocator->set_flags(flags);
+  port_allocator->set_step_delay(cricket::kMinimumStepDelay);  // Speed up gathering
+  port_allocator->set_candidate_filter(cricket::CF_ALL);  // Allow all candidate types
+
+  webrtc::PeerConnectionDependencies pc_dependencies(this);
+  pc_dependencies.allocator = std::move(port_allocator);
+
+  auto pcf_result = peer_connection_factory_->CreatePeerConnectionOrError(
+      config, std::move(pc_dependencies));
+  RTC_DCHECK(pcf_result.ok());    
+  peer_connection_ = pcf_result.MoveValue();
+  RTC_LOG(LS_INFO) << "PeerConnection created successfully.";
+
   return true;
 }
 
 void DirectApplication::HandleMessage(rtc::AsyncPacketSocket* socket,
                                       const std::string& message,
                                       const rtc::SocketAddress& remote_addr) {
-  if (!CheckConnection(socket)) {
-    return;
-  }
-
   if (message.find("ICE:") == 0) {
     ice_candidates_received_++;
     SendMessage("ICE_ACK:" + std::to_string(ice_candidates_received_));
@@ -140,68 +366,64 @@ void DirectApplication::HandleMessage(rtc::AsyncPacketSocket* socket,
 }
 
 bool DirectApplication::SendMessage(const std::string& message) {
-  if (!CheckConnection(tcp_socket_.get())) {
+  if (!tcp_socket_) {
+    RTC_LOG(LS_ERROR) << "Cannot send message, socket is null";
     return false;
   }
-
+  RTC_LOG(LS_INFO) << "Sending message: " << message;
   size_t sent = tcp_socket_->Send(message.c_str(), message.length(),
                                   rtc::PacketOptions());
   if (sent <= 0) {
-    HandleDisconnect();
+    RTC_LOG(LS_ERROR) << "Failed to send message, error: " << errno;
     return false;
   }
-
+  RTC_LOG(LS_INFO) << "Successfully sent " << sent << " bytes";
   return true;
 }
 
-bool DirectApplication::RestartConnection() {
-  // Base implementation for restarting network connection
-  if (tcp_socket_) {
-    tcp_socket_->Close();
-    tcp_socket_ = nullptr;
+int main(int argc, char* argv[]) {
+  rtc::LogMessage::LogToDebug(rtc::LS_INFO);
+  
+  Options opts = parseOptions(argc, argv);
+
+  if (argc==1||opts.help) {
+    std::string usage = opts.help_string;
+    RTC_LOG(LS_ERROR) << usage;
+    return 1;
   }
 
-  return InitializeSocket();
+  RTC_LOG(LS_INFO) << getUsage(opts);
+
+  rtc::InitializeSSL();
+
+  if (opts.mode == "caller") {
+    DirectCaller caller(opts);
+    if (!caller.Initialize()) {
+      RTC_LOG(LS_ERROR) << "failed to initialize caller";
+      return 1;
+    }
+    if (!caller.Connect()) {
+      RTC_LOG(LS_ERROR) << "failed to connect";
+      return 1;
+    }
+    caller.Run();
+  } else if (opts.mode == "callee") {
+    DirectCallee callee(opts);
+    if (!callee.Initialize()) {
+      RTC_LOG(LS_ERROR) << "Failed to initialize callee";
+      return 1;
+    }
+    if (!callee.StartListening()) {
+      RTC_LOG(LS_ERROR) << "Failed to start listening";
+      return 1;
+    }
+    callee.Run();
+  } else {
+    RTC_LOG(LS_ERROR) << "Invalid mode: " << opts.mode;
+    return 1;
+  }
+
+  rtc::CleanupSSL();  // Changed from rtc::CleanupSSL()
+  return 0;
 }
 
-int main(int argc, char* argv[]) {
-    Options opts = parseOptions(argc, argv);
-
-    if (argc == 1 || opts.help) {
-        std::string usage = opts.help_string;
-        RTC_LOG(LS_ERROR) << usage;
-        return 1;
-    }
-
-    RTC_LOG(LS_INFO) << getUsage(opts);
-
-    rtc::InitializeSSL();
-
-    int ret = 0;
-    if (opts.is_caller) {
-        DirectCaller caller(opts);
-        if (!caller.Initialize()) {
-            RTC_LOG(LS_ERROR) << "failed to initialize caller";
-            ret = 1;
-        } else if (!caller.Connect()) {
-            RTC_LOG(LS_ERROR) << "failed to connect";
-            ret = 1;
-        } else {
-            caller.Run();
-        }
-    } else {
-        DirectCallee callee(opts);
-        if (!callee.Initialize()) {
-            RTC_LOG(LS_ERROR) << "Failed to initialize callee";
-            ret = 1;
-        } else if (!callee.StartListening()) {
-            RTC_LOG(LS_ERROR) << "Failed to start listening";
-            ret = 1;
-        } else {
-            callee.Run();
-        }
-    }
-
-    rtc::CleanupSSL();
-    return ret;
-}
