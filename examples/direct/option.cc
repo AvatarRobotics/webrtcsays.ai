@@ -117,30 +117,30 @@ Options parseOptions(int argc, char* argv[]) {
   opts.help = false;
   // Restore original help string
   opts.help_string =
-      "Usage:\\n"
-      "direct [options] address [options]\\n\\n"
-      "Options:\\n"
-      "  --config <path>                  Load options from JSON config file.\\n"
-      "                                     Command-line options override config file.\\n"
-      "  --mode <caller|callee>             Set operation mode (default: caller)\\n"
-      "  --encryption, --no-encryption      Enable/disable encryption (default: disabled)\\n"
-      "  --whisper, --no-whisper            Enable/disable whisper (default: no-whisper)\\n"
-      "  --video, --no-video                Enable/disable video (default: disabled)\\n" // Added video help
-      "  --whisper_model=<path>             Path to whisper model\\n"
-      "  --llama_model=<path>               Path to llama model\\n"
-      "  --webrtc_cert_path=<path>          Path to WebRTC certificate (default: 'cert.pem')\\n"
-      "  --webrtc_key_path=<path>           Path to WebRTC key (default: 'key.pem')\\n"
-      "  --turns=<ip,username,password>     Secured turn server address, e.g. \\n"
-      "   'turns:global.relay.metered.ca:443?transport=tcp,<username>,<password>'\\n"
-      "  --vpn=<interface_name>           Specify VPN interface name\\n" // Added VPN help
-      "  --help                             Show this help message\\n\\n"
-      "\\nExamples (callee called first, encryption is recommended):\\n"
-      "  direct --config settings.json\\n"
-      "  direct --config settings.json --mode=callee --no-encryption\\n"
-      "  direct --mode=callee :3478 --no-encryption\\n"
+      "Usage:\n"
+      "direct [options] address [options]\n\n"
+      "Options:\n"
+      "  --config <path>                  Load options from JSON config file.\n"
+      "                                     Command-line options override config file.\n"
+      "  --mode <caller|callee>             Set operation mode (default: caller)\n"
+      "  --encryption, --no-encryption      Enable/disable encryption (default: disabled)\n"
+      "  --whisper, --no-whisper            Enable/disable whisper (default: no-whisper)\n"
+      "  --video, --no-video                Enable/disable video (default: disabled)\n" // Added video help
+      "  --whisper_model=<path>             Path to whisper model\n"
+      "  --llama_model=<path>               Path to llama model\n"
+      "  --webrtc_cert_path=<path>          Path to WebRTC certificate (default: 'cert.pem')\n"
+      "  --webrtc_key_path=<path>           Path to WebRTC key (default: 'key.pem')\n"
+      "  --turns=<ip,username,password>     Secured turn server address, e.g. \n"
+      "   'turns:global.relay.metered.ca:443?transport=tcp,<username>,<password>'\n"
+      "  --vpn=<interface_name>           Specify VPN interface name\n" // Added VPN help
+      "  --help                             Show this help message\n\n"
+      "Examples (callee called first, encryption is recommended):\n"
+      "  direct --config settings.json\n"
+      "  direct --config settings.json --mode=callee --no-encryption\n"
+      "  direct --mode=callee :3478 --no-encryption\n"
       "  direct --mode=callee 192.168.1.100:3478 --encryption --whisper"
-      " --whisper_model=/path/to/model.bin --llama_model=/path/to/llama.gguf\\n\\n"
-      "  direct --mode=caller 192.168.1.100:3478 --encryption\\n"
+      " --whisper_model=/path/to/model.bin --llama_model=/path/to/llama.gguf\n"
+      "  direct --mode=caller 192.168.1.100:3478 --encryption\n"
       ;
 
   // --- First pass: check for --config --- 
