@@ -11,7 +11,6 @@
  */
 
 #include "direct.h"
-#include "utils.h"
 
 // DirectCaller Implementation
 DirectCaller::DirectCaller(Options opts)

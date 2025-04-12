@@ -11,7 +11,6 @@
  */
 
 #include "direct.h"
-#include "utils.h"
 
 // DirectCallee Implementation
 DirectCallee::DirectCallee(Options opts) 

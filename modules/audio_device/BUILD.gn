@@ -535,7 +535,8 @@ if (!build_with_chromium) {
       ]
       lib_dirs = [ "//modules/third_party/whillats/build/bin" ]
       libs = [ "whillats" ]
-    } else {
+    } else if (is_linux) {
+      # Only add these for Linux, not other non-macOS platforms like iOS
       libs += [
         "gomp",
         "stdc++"

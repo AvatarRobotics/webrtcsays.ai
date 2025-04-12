@@ -10,10 +10,11 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include "direct.h"
-#include "utils.h"
 #include "rtc_base/network.h"
 #include "rtc_base/ip_address.h"
+
+#include "direct.h"
+#include "option.h"
 
 rtc::IPAddress IPFromString(absl::string_view str) {
   rtc::IPAddress ip;

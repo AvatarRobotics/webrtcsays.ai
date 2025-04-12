@@ -55,7 +55,7 @@
 #include "rtc_base/third_party/sigslot/sigslot.h"
 #include "system_wrappers/include/clock.h"
 #include "system_wrappers/include/field_trial.h"
-#include "utils.h"
+#include "option.h"
 
 #ifdef WEBRTC_SPEECH_DEVICES
 #include "modules/audio_device/speech/speech_audio_device_factory.h"

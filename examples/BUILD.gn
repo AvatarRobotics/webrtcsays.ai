@@ -910,7 +910,7 @@ if (!build_with_chromium) {
       "direct/caller.cc",
       "direct/callee.cc",
       "direct/peer.cc",
-      "direct/utils.cc",
+      "direct/option.cc",
     ]
 
     cflags = [ "-g", "-O0" ]
@@ -973,6 +973,7 @@ if (!build_with_chromium) {
       "../test:field_trial",
       "../test:rtp_test_utils",
       "//third_party/abseil-cpp/absl/memory",
+      "//third_party/jsoncpp:jsoncpp"
     ]
 
     # Restore speech device framework linking if needed
@@ -987,7 +988,7 @@ if (!build_with_chromium) {
       if (!defined(ldflags)) {
         ldflags = []
       }
-      ldflags += [ "-install_name", "@rpath/libdirect_lib.dylib" ]
+      ldflags += [ "-install_name", "@rpath/libdirect.dylib" ]
       ldflags += [ "-Wl,-rpath,@loader_path/../Default" ]
     }
 

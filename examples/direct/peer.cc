@@ -12,7 +12,6 @@
 
 
 #include "direct.h"
-#include "utils.h"
 
 DirectPeer::DirectPeer(
     Options opts) 
