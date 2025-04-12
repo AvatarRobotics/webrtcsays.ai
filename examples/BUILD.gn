@@ -892,6 +892,7 @@ if (!build_with_chromium) {
 
   shared_library("direct_lib") {
     # Apply common configs
+    output_name = "direct"
     configs += [ "//:common_inherited_config" ]
     if (!defined(testonly) || !testonly) {
       configs += rtc_prod_configs
