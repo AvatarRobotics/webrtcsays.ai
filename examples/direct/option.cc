@@ -21,6 +21,32 @@
 
 #include "option.h"
 
+// Helper function to expand ${HOME} in paths
+namespace {
+std::string expandHomePath(const std::string& path) {
+    if (path.rfind("${HOME}", 0) == 0) { // Check if path starts with ${HOME}
+        const char* home_dir = std::getenv("HOME");
+        if (home_dir) {
+            std::string expanded_path = home_dir;
+            // Append the rest of the path, handling the optional separator
+            if (path.length() > 7 && (path[7] == '/' || path[7] == '\\')) {
+                expanded_path += path.substr(7); // Skip ${HOME} and the separator
+            } else if (path.length() > 7) { 
+                 expanded_path += "/"; // Add separator if missing
+                 expanded_path += path.substr(7); // Skip ${HOME}
+            } else { 
+                 // Path was just "${HOME}", nothing to append
+            }
+            return expanded_path;
+        } else {
+            RTC_LOG(LS_WARNING) << "HOME environment variable not set, cannot expand path: " << path;
+            return path; // Return original path if HOME is not set
+        }
+    } 
+    return path; // Return original path if it doesn't start with ${HOME}
+}
+} // namespace
+
 #if defined(WEBRTC_LINUX)
 extern "C" {
 void __libc_csu_init() {}
@@ -164,23 +190,23 @@ Options parseOptions(int argc, char* argv[]) {
         }
         if (config_json.isMember("whisper_model") && config_json["whisper_model"].isString()) {
              RTC_LOG(LS_INFO) << "JSON: Found whisper_model: " << config_json["whisper_model"].asString(); // Log value
-             opts.whisper_model = config_json["whisper_model"].asString();
+             opts.whisper_model = expandHomePath(config_json["whisper_model"].asString());
         }
         if (config_json.isMember("llama_model") && config_json["llama_model"].isString()) {
              RTC_LOG(LS_INFO) << "JSON: Found llama_model: " << config_json["llama_model"].asString(); // Log value
-             opts.llama_model = config_json["llama_model"].asString();
+             opts.llama_model = expandHomePath(config_json["llama_model"].asString());
         }
         if (config_json.isMember("webrtc_cert_path") && config_json["webrtc_cert_path"].isString()) {
              RTC_LOG(LS_INFO) << "JSON: Found webrtc_cert_path: " << config_json["webrtc_cert_path"].asString(); // Log value
-             opts.webrtc_cert_path = config_json["webrtc_cert_path"].asString();
+             opts.webrtc_cert_path = expandHomePath(config_json["webrtc_cert_path"].asString());
         }
         if (config_json.isMember("webrtc_key_path") && config_json["webrtc_key_path"].isString()) {
              RTC_LOG(LS_INFO) << "JSON: Found webrtc_key_path: " << config_json["webrtc_key_path"].asString(); // Log value
-             opts.webrtc_key_path = config_json["webrtc_key_path"].asString();
+             opts.webrtc_key_path = expandHomePath(config_json["webrtc_key_path"].asString());
         }
         if (config_json.isMember("webrtc_speech_initial_playout_wav") && config_json["webrtc_speech_initial_playout_wav"].isString()) {
              RTC_LOG(LS_INFO) << "JSON: Found initial playout_wav: " << config_json["webrtc_speech_initial_playout_wav"].asString(); // Log value
-             opts.webrtc_speech_initial_playout_wav = config_json["webrtc_speech_initial_playout_wav"].asString();
+             opts.webrtc_speech_initial_playout_wav = expandHomePath(config_json["webrtc_speech_initial_playout_wav"].asString());
         }
         if (config_json.isMember("address") && config_json["address"].isString()) {
              RTC_LOG(LS_INFO) << "JSON: Found address: " << config_json["address"].asString(); // Log value
