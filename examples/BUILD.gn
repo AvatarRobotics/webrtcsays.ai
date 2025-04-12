@@ -727,9 +727,7 @@ if (is_linux || is_chromeos || is_win) {
       "../system_wrappers:field_trial",
       "../test:field_trial",
       "../test:frame_generator_capturer",
-      "../test:platform_video_capturer",
       "../test:rtp_test_utils",
-      "../test:test_video_capturer",
       "//third_party/abseil-cpp/absl/memory",
       "//third_party/jsoncpp",
     ]
@@ -892,7 +890,15 @@ if (!build_with_chromium) {
     }
   }
 
-  rtc_executable("direct") {
+  shared_library("direct_lib") {
+    # Apply common configs
+    configs += [ "//:common_inherited_config" ]
+    if (!defined(testonly) || !testonly) {
+      configs += rtc_prod_configs
+    }
+    configs += rtc_library_impl_config
+    configs -= rtc_remove_configs
+
     testonly = true
     defines = []
     include_dirs = []
@@ -908,13 +914,14 @@ if (!build_with_chromium) {
 
     cflags = [ "-g", "-O0" ]
     include_dirs += [ "../third_party/boringssl/src/include" ]
-
     if (rtc_use_speech_audio_devices) {
       defines += [ "WEBRTC_SPEECH_DEVICES" ]
       include_dirs += [ "../modules/third_party/espeak-ng/src/include" ]
     }
 
+    # Restore full dependencies (needed for compilation)
     deps = [
+      "//sdk/dylib:webrtc_dylib",
       "../api:async_dns_resolver",
       "../api:audio_options_api",
       "../api:create_peerconnection_factory",
@@ -963,43 +970,67 @@ if (!build_with_chromium) {
       "../rtc_base/third_party/sigslot",
       "../system_wrappers:field_trial",
       "../test:field_trial",
-      "../test:platform_video_capturer",
       "../test:rtp_test_utils",
       "//third_party/abseil-cpp/absl/memory",
     ]
- 
-    # WebRTCsays.ai stuff
-    if(rtc_use_speech_audio_devices) {
-      lib_dirs = [
-        "../../src/modules/third_party/whillats/build/bin",
-      ]
-      
-      libs = [
-        "whillats",
-        "whisper",
-        "llama",
-        "ggml",
-        "ggml-base",
-        "ggml-cpu",
-      ]
-      if(is_linux) {
-        libs += [
-          "stdc++"
-        ]
-        lib_dirs += ["/usr/lib/x86_64-linux-gnu"]
-        ldflags = [
-          "-Wl,--allow-shlib-undefined",
-        ]
-      }
-      else if(is_mac) {
+
+    # Restore speech device framework linking if needed
+    if (rtc_use_speech_audio_devices) {
+      if (is_mac) {
         frameworks = [ "CoreAudio.framework" ]
-        ldflags = [
-          "-Wl,-rpath,@loader_path/../../modules/third_party/whillats/build/bin",  # Relative to the executable
-        ]
-      }    
-    } 
-    
+      }
+    }
+
+    # Restore shared library ldflags for macOS
+    if (is_mac) {
+      if (!defined(ldflags)) {
+        ldflags = []
+      }
+      ldflags += [ "-install_name", "@rpath/libdirect_lib.dylib" ]
+      ldflags += [ "-Wl,-rpath,@loader_path/../Default" ]
+    }
+
     configs += []
   }
 
+  rtc_executable("direct") {
+    testonly = true
+    defines = []
+    include_dirs = []
+    sources = [ "direct/main.cc" ]
+
+    cflags = [ "-g", "-O0" ]
+    include_dirs += [ "../third_party/boringssl/src/include" ]
+
+    if (rtc_use_speech_audio_devices) {
+      defines += [ "WEBRTC_SPEECH_DEVICES" ]
+      include_dirs += [ "../modules/third_party/espeak-ng/src/include" ]
+    }
+
+    # Link only against direct_lib (now shared)
+    deps = [
+      ":direct_lib",
+    ]
+
+    # Restore speech device libs/ldflags
+    if(rtc_use_speech_audio_devices) {
+      if(is_mac) {
+        frameworks = [ "CoreAudio.framework" ]
+        ldflags = [
+          "-Wl,-rpath,@loader_path/../../modules/third_party/whillats/build/bin",
+        ]
+      }
+    }
+
+    # Keep rpath setting for executable 
+    if (is_mac) {
+      if (!defined(ldflags)) {
+        ldflags = []
+      }
+      ldflags += [ "-Wl,-rpath,@loader_path/" ]
+      ldflags += [ "-Wl,-rpath,@loader_path/../Default" ]
+    }
+
+    configs += []
+  }
 }

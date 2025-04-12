@@ -52,6 +52,7 @@
 #include "rtc_base/ssl_identity.h"
 #include "rtc_base/thread.h"
 #include "rtc_base/virtual_socket_server.h"
+#include "rtc_base/third_party/sigslot/sigslot.h"
 #include "system_wrappers/include/clock.h"
 #include "system_wrappers/include/field_trial.h"
 #include "utils.h"
@@ -59,6 +60,8 @@
 #ifdef WEBRTC_SPEECH_DEVICES
 #include "modules/audio_device/speech/speech_audio_device_factory.h"
 #endif
+
+#include "rtc_base/system/rtc_export.h"
 
 class LambdaCreateSessionDescriptionObserver
     : public webrtc::CreateSessionDescriptionObserver {
@@ -109,9 +112,18 @@ class LambdaSetRemoteDescriptionObserver
   std::function<void(webrtc::RTCError)> on_complete_;
 };
 
-#include "rtc_base/third_party/sigslot/sigslot.h"
+// Function to create a self-signed certificate
+rtc::scoped_refptr<rtc::RTCCertificate> CreateCertificate();
 
-class DirectApplication : public webrtc::PeerConnectionObserver {
+// Function to load a certificate from PEM files
+rtc::scoped_refptr<rtc::RTCCertificate> LoadCertificate(const std::string& cert_path, const std::string& key_path);
+
+// Function to load certificate from environment variables or fall back to CreateCertificate
+rtc::scoped_refptr<rtc::RTCCertificate> LoadCertificateFromEnv(Options opts);
+
+
+
+class RTC_EXPORT DirectApplication : public webrtc::PeerConnectionObserver {
  public:
   DirectApplication();
   virtual ~DirectApplication();
@@ -199,7 +211,7 @@ class DirectApplication : public webrtc::PeerConnectionObserver {
   std::vector<std::string> vpns_;
 };
 
-class DirectPeer : public DirectApplication {
+class RTC_EXPORT DirectPeer : public DirectApplication {
  public:
   DirectPeer(Options opts);
   ~DirectPeer() override;
@@ -255,7 +267,7 @@ class DirectPeer : public DirectApplication {
       set_remote_description_observer_;
 };
 
-class DirectCallee : public DirectPeer, public sigslot::has_slots<> {
+class RTC_EXPORT DirectCallee : public DirectPeer, public sigslot::has_slots<> {
  public:
   explicit DirectCallee(Options opts);
   ~DirectCallee() override;
@@ -277,7 +289,7 @@ class DirectCallee : public DirectPeer, public sigslot::has_slots<> {
       listen_socket_;  // Changed to unique_ptr
 };
 
-class DirectCaller : public DirectPeer, public sigslot::has_slots<> {
+class RTC_EXPORT DirectCaller : public DirectPeer, public sigslot::has_slots<> {
  public:
   explicit DirectCaller(Options opts);
   ~DirectCaller() override;

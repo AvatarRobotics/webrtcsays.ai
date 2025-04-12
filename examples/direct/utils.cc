@@ -11,6 +11,10 @@
  */
 
 #include "utils.h"
+#include "rtc_base/logging.h"
+#include "rtc_base/ref_counted_object.h"
+#include "rtc_base/rtc_certificate_generator.h"
+#include "rtc_base/system/rtc_export.h"
 
 #if defined(WEBRTC_LINUX)
 extern "C" {
@@ -53,86 +57,6 @@ std::vector<std::string> stringSplit(std::string input, std::string delimiter)
 
     tokens.push_back(input);
     return tokens;
-}
-
-// Function to create a self-signed certificate
-rtc::scoped_refptr<rtc::RTCCertificate> CreateCertificate() {
-  auto key_params = rtc::KeyParams::RSA(2048);  // Use RSA with 2048-bit key
-  auto identity = rtc::SSLIdentity::Create("webrtc", key_params);
-  if (!identity) {
-    RTC_LOG(LS_ERROR) << "Failed to create SSL identity";
-    return nullptr;
-  }
-  return rtc::RTCCertificate::Create(std::move(identity));
-}
-
-// Function to read a file into a string
-std::string ReadFile(const std::string& path) {
-  std::ifstream file(path);
-  if (!file.is_open()) {
-    RTC_LOG(LS_ERROR) << "Failed to open file: " << path;
-    return "";
-  }
-  std::ostringstream oss;
-  oss << file.rdbuf();
-  return oss.str();
-}
-
-// Function to load a certificate from PEM files
-rtc::scoped_refptr<rtc::RTCCertificate> LoadCertificate(
-    const std::string& cert_path,
-    const std::string& key_path) {
-  // Read the certificate and key files
-  std::string cert_pem = ReadFile(cert_path);
-  std::string key_pem = ReadFile(key_path);
-
-  if (cert_pem.empty() || key_pem.empty()) {
-    RTC_LOG(LS_ERROR) << "Failed to read certificate or key file";
-    return nullptr;
-  }
-
-  // Log the PEM strings for debugging
-  RTC_LOG(LS_VERBOSE) << "Certificate PEM:\n" << cert_pem;
-  RTC_LOG(LS_VERBOSE) << "Private Key PEM:\n" << key_pem;
-
-  // Create an SSL identity from the PEM strings
-  auto identity = rtc::SSLIdentity::CreateFromPEMStrings(key_pem, cert_pem);
-  if (!identity) {
-    RTC_LOG(LS_ERROR) << "Failed to create SSL identity from PEM strings";
-    return nullptr;
-  }
-
-  return rtc::RTCCertificate::Create(std::move(identity));
-}
-
-// Function to load certificate from environment variables or fall back to
-// CreateCertificate
-rtc::scoped_refptr<rtc::RTCCertificate> LoadCertificateFromEnv(Options opts) {
-  // Get paths from environment variables
-  const char* cert_path = opts.webrtc_cert_path.empty()
-                              ? std::getenv("WEBRTC_CERT_PATH")
-                              : opts.webrtc_cert_path.c_str();
-  const char* key_path = opts.webrtc_key_path.empty()
-                             ? std::getenv("WEBRTC_KEY_PATH")
-                             : opts.webrtc_key_path.c_str();
-
-  if (cert_path && key_path) {
-    RTC_LOG(LS_INFO) << "Loading certificate from " << cert_path << " and "
-                     << key_path;
-    auto certificate = LoadCertificate(cert_path, key_path);
-    if (certificate) {
-      return certificate;
-    }
-    RTC_LOG(LS_WARNING) << "Failed to load certificate from files; falling "
-                           "back to CreateCertificate";
-  } else {
-    RTC_LOG(LS_WARNING)
-        << "Environment variables WEBRTC_CERT_PATH and WEBRTC_KEY_PATH not "
-           "set; falling back to CreateCertificate";
-  }
-
-  // Fall back to CreateCertificate
-  return CreateCertificate();
 }
 
 // Function to parse command line string to above options
