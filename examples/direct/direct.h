@@ -123,7 +123,7 @@ rtc::scoped_refptr<rtc::RTCCertificate> LoadCertificateFromEnv(Options opts);
 
 
 
-class RTC_EXPORT DirectApplication : public webrtc::PeerConnectionObserver {
+class __attribute__((visibility("default"))) DirectApplication : public webrtc::PeerConnectionObserver {
  public:
   DirectApplication();
   virtual ~DirectApplication();
@@ -134,8 +134,10 @@ class RTC_EXPORT DirectApplication : public webrtc::PeerConnectionObserver {
 
   // Run the application event loop
   void Run();
-
   rtc::PhysicalSocketServer* pss() { return pss_.get(); }
+
+  static void __attribute__((visibility("default"))) rtcInitializeSSL();
+  static void __attribute__((visibility("default"))) rtcCleanupSSL();
 
  protected:
     
@@ -211,7 +213,7 @@ class RTC_EXPORT DirectApplication : public webrtc::PeerConnectionObserver {
   std::vector<std::string> vpns_;
 };
 
-class RTC_EXPORT DirectPeer : public DirectApplication {
+class __attribute__((visibility("default"))) DirectPeer : public DirectApplication {
  public:
   DirectPeer(Options opts);
   ~DirectPeer() override;
@@ -267,7 +269,7 @@ class RTC_EXPORT DirectPeer : public DirectApplication {
       set_remote_description_observer_;
 };
 
-class RTC_EXPORT DirectCallee : public DirectPeer, public sigslot::has_slots<> {
+class __attribute__((visibility("default"))) DirectCallee : public DirectPeer, public sigslot::has_slots<> {
  public:
   explicit DirectCallee(Options opts);
   ~DirectCallee() override;
@@ -289,7 +291,7 @@ class RTC_EXPORT DirectCallee : public DirectPeer, public sigslot::has_slots<> {
       listen_socket_;  // Changed to unique_ptr
 };
 
-class RTC_EXPORT DirectCaller : public DirectPeer, public sigslot::has_slots<> {
+class RTC_EXPORT __attribute__((visibility("default"))) DirectCaller : public DirectPeer, public sigslot::has_slots<> {
  public:
   explicit DirectCaller(Options opts);
   ~DirectCaller() override;

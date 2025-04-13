@@ -24,7 +24,7 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  rtc::InitializeSSL();
+  DirectApplication::rtcInitializeSSL();
 
   if (opts.mode == "caller") {
     DirectCaller caller(opts);
@@ -54,6 +54,6 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  rtc::CleanupSSL();
+  DirectApplication::rtcCleanupSSL();
   return 0;
 }

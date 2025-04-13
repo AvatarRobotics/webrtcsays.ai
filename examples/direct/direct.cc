@@ -16,6 +16,14 @@
 #include "direct.h"
 #include "option.h"
 
+void DirectApplication::rtcInitializeSSL() {
+  rtc::InitializeSSL();
+}
+
+void DirectApplication::rtcCleanupSSL() {
+  rtc::CleanupSSL();
+}
+
 rtc::IPAddress IPFromString(absl::string_view str) {
   rtc::IPAddress ip;
   RTC_CHECK(rtc::IPFromString(str, &ip));
@@ -266,17 +274,17 @@ bool DirectApplication::CreatePeerConnection(Options opts_) {
       dependencies_.adm,
       webrtc::CreateBuiltinAudioEncoderFactory(),
       webrtc::CreateBuiltinAudioDecoderFactory(),
-      opts_.video ? std::make_unique<webrtc::VideoEncoderFactoryTemplate<
-          webrtc::LibvpxVp8EncoderTemplateAdapter,
-          webrtc::LibvpxVp9EncoderTemplateAdapter,
-          webrtc::OpenH264EncoderTemplateAdapter,
-          webrtc::LibaomAv1EncoderTemplateAdapter>>() : nullptr,
-      opts_.video ? std::make_unique<webrtc::VideoDecoderFactoryTemplate<
-          webrtc::LibvpxVp8DecoderTemplateAdapter,
-          webrtc::LibvpxVp9DecoderTemplateAdapter,
-          webrtc::OpenH264DecoderTemplateAdapter,
-          webrtc::Dav1dDecoderTemplateAdapter>>() : nullptr,
-      nullptr, nullptr);
+      // Pass nullptr for video factories to use internal defaults
+      nullptr, // video_encoder_factory
+      nullptr, // video_decoder_factory
+      nullptr, // audio_mixer
+      nullptr  // audio_processing
+  );
+
+  if (!peer_connection_factory_) {
+    RTC_LOG(LS_ERROR) << "Failed to create PeerConnectionFactory";
+    return false; // Handle error appropriately
+  }
 
   webrtc::PeerConnectionInterface::RTCConfiguration config;
   config.sdp_semantics = webrtc::SdpSemantics::kUnifiedPlan;
