@@ -1173,7 +1173,7 @@ if (!build_with_chromium) {
     if(!is_ios && rtc_use_speech_audio_devices) {
       if(is_mac) {
         frameworks = [ "CoreAudio.framework" ] # System framework
-        ldflags += [ "-Wl,-rpath,@loader_path/../modules/third_party/whillats/build/bin" ]
+        ldflags += [ "-Wl,-rpath,@loader_path/../../modules/third_party/whillats/build/bin" ]
       } else if (is_linux) {
           # Add necessary libs/rpath for whillats on Linux if applicable
       }
