@@ -33,7 +33,28 @@
 #include <sys/socket.h>
 #include <netinet/tcp.h>
 
-#include "rtc_base/system/rtc_export.h"
+#ifndef DIRECT_EXPORT_H
+#define DIRECT_EXPORT_H
+
+#if defined(_MSC_VER)
+    #define WHILLATS_EXPORT __declspec(dllexport)
+    #define WHILLATS_IMPORT __declspec(dllimport)
+#elif defined(__GNUC__)
+    #define DIRECT_EXPORT __attribute__((visibility("default")))
+    #define DIRECT_IMPORT __attribute__((visibility("default")))
+#else
+    #define DIRECT_EXPORT
+    #define DIRECT_IMPORT
+#endif
+
+#ifdef DIRECT_BUILDING_DLL
+    #define DIRECT_API DIRECT_EXPORT
+#else
+    #define DIRECT_API DIRECT_IMPORT
+#endif
+
+#endif // DIRECT_EXPORT_H 
+
 
 // Function to parse IP address and port from a string in the format "IP:PORT"
 bool ParseIpAndPort(const std::string& ip_port, std::string& ip, int& port);
@@ -62,7 +83,7 @@ struct Options {
 };
 
 // Function to parse command line string to above options
-__attribute__((visibility("default"))) RTC_EXPORT Options parseOptions(int argc, char* argv[]);
+DIRECT_API Options parseOptions(int argc, char* argv[]);
 
 // Function to get command line options to a string, to print or speak
-__attribute__((visibility("default"))) RTC_EXPORT std::string getUsage(const Options opts);
+DIRECT_API std::string getUsage(const Options opts);
