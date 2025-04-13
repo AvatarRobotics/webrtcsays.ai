@@ -104,7 +104,7 @@ std::vector<std::string> stringSplit(std::string input, std::string delimiter)
 }
 
 // Function to parse command line string to above options
-Options parseOptions(int argc, char* argv[]) {
+Options parseOptions(const std::vector<std::string>& args) {
   Options opts;
   // Initialize defaults (ensure all relevant defaults are set here)
   opts.encryption = false;
@@ -144,10 +144,10 @@ Options parseOptions(int argc, char* argv[]) {
       ;
 
   // --- First pass: check for --config --- 
-  for (int i = 1; i < argc; ++i) {
-    std::string arg = argv[i];
-    if (arg == "--config" && i + 1 < argc) {
-      opts.config_path = argv[i + 1];
+  for (size_t i = 0; i < args.size(); ++i) { // Use size_t for indexing vector
+    const std::string& arg = args[i]; // Get argument by reference
+    if (arg == "--config" && i + 1 < args.size()) {
+      opts.config_path = args[i + 1];
       break; // Found config, stop first pass
     } else if (arg.find("--config=") == 0) {
       opts.config_path = arg.substr(9);
@@ -272,11 +272,11 @@ Options parseOptions(int argc, char* argv[]) {
   };
 
   // --- Second pass: parse command-line arguments (overriding config) ---
-  for (int i = 1; i < argc; ++i) {
-    std::string arg = argv[i];
+  for (size_t i = 0; i < args.size(); ++i) { // Use size_t for indexing vector
+    const std::string& arg = args[i]; // Get argument by reference
 
     // Skip the --config argument itself in the second pass
-    if (arg == "--config" && i + 1 < argc) {
+    if (arg == "--config" && i + 1 < args.size()) {
       i++; // Skip the path value as well
       continue;
     } else if (arg.find("--config=") == 0) {

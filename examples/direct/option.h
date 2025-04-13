@@ -83,7 +83,7 @@ struct Options {
 };
 
 // Function to parse command line string to above options
-DIRECT_API Options parseOptions(int argc, char* argv[]);
+DIRECT_API Options parseOptions(const std::vector<std::string>& args);
 
 // Function to get command line options to a string, to print or speak
 DIRECT_API std::string getUsage(const Options opts);

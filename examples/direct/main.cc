@@ -12,12 +12,15 @@
 
 #include "direct.h"
 #include <string>
+#include <vector>
 
 int main(int argc, char* argv[]) {
   
-  Options opts = parseOptions(argc, argv);
+  std::vector<std::string> args(argv + 1, argv + argc);
+  
+  Options opts = parseOptions(args);
 
-  if (argc==1||opts.help) {
+  if (opts.help) {
     auto usage = opts.help_string;
     // Print usage to stderr instead for command-line tools
     fprintf(stderr, "%s\n", usage.c_str()); 
