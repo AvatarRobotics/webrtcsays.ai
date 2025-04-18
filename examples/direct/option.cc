@@ -13,13 +13,21 @@
 #include <fstream>     // For file operations
 #include <cerrno>      // For errno used with strtol
 
+#include "api/jsep.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/ref_counted_object.h"
 #include "rtc_base/rtc_certificate_generator.h"
 #include "rtc_base/system/rtc_export.h"
+#include "rtc_base/crypto_random.h"
+
 #include <json/json.h> // Use jsoncpp header
 
 #include "option.h"
+
+/// Function to parse IP address and port from a string in the format "IP:PORT"
+bool ParseIpAndPort(const std::string& ip_port, std::string& ip, int& port);
+// String split
+std::vector<std::string> stringSplit(std::string input, std::string delimiter);
 
 // Helper function to expand ${HOME} in paths
 namespace {
@@ -103,12 +111,18 @@ std::vector<std::string> stringSplit(std::string input, std::string delimiter)
     return tokens;
 }
 
+DIRECT_API Options parseOptions(const char* argString) {
+  std::vector<std::string> args = stringSplit(argString, " ");
+  return parseOptions(args);
+}
+
 // Function to parse command line string to above options
 Options parseOptions(const std::vector<std::string>& args) {
   Options opts;
   // Initialize defaults (ensure all relevant defaults are set here)
   opts.encryption = false;
   opts.whisper = false;
+  opts.llama = false; // Initialize llama default
   opts.video = false; // Assuming default is false
   opts.mode = ""; 
   opts.webrtc_cert_path = "cert.pem";
@@ -185,7 +199,7 @@ Options parseOptions(const std::vector<std::string>& args) {
         // Explicitly parse each option without macros
         // Strings
         if (config_json.isMember("mode") && config_json["mode"].isString()) {
-             RTC_LOG(LS_INFO) << "JSON: Found mode: " << config_json["mode"].asString(); // Log value
+             RTC_LOG(LS_INFO) << "Config mode: " << config_json["mode"].asString(); // Log value
              opts.mode = config_json["mode"].asString(); // Direct assignment (Uncommented)
         }
         if (config_json.isMember("whisper_model") && config_json["whisper_model"].isString()) {
@@ -193,49 +207,49 @@ Options parseOptions(const std::vector<std::string>& args) {
              opts.whisper_model = expandHomePath(config_json["whisper_model"].asString());
         }
         if (config_json.isMember("llama_model") && config_json["llama_model"].isString()) {
-             RTC_LOG(LS_INFO) << "JSON: Found llama_model: " << config_json["llama_model"].asString(); // Log value
+             RTC_LOG(LS_INFO) << "Config llama_model: " << config_json["llama_model"].asString(); // Log value
              opts.llama_model = expandHomePath(config_json["llama_model"].asString());
         }
         if (config_json.isMember("webrtc_cert_path") && config_json["webrtc_cert_path"].isString()) {
-             RTC_LOG(LS_INFO) << "JSON: Found webrtc_cert_path: " << config_json["webrtc_cert_path"].asString(); // Log value
+             RTC_LOG(LS_INFO) << "Config webrtc_cert_path: " << config_json["webrtc_cert_path"].asString(); // Log value
              opts.webrtc_cert_path = expandHomePath(config_json["webrtc_cert_path"].asString());
         }
         if (config_json.isMember("webrtc_key_path") && config_json["webrtc_key_path"].isString()) {
-             RTC_LOG(LS_INFO) << "JSON: Found webrtc_key_path: " << config_json["webrtc_key_path"].asString(); // Log value
+             RTC_LOG(LS_INFO) << "Config webrtc_key_path: " << config_json["webrtc_key_path"].asString(); // Log value
              opts.webrtc_key_path = expandHomePath(config_json["webrtc_key_path"].asString());
         }
         if (config_json.isMember("webrtc_speech_initial_playout_wav") && config_json["webrtc_speech_initial_playout_wav"].isString()) {
-             RTC_LOG(LS_INFO) << "JSON: Found initial playout_wav: " << config_json["webrtc_speech_initial_playout_wav"].asString(); // Log value
+             RTC_LOG(LS_INFO) << "Config initial playout_wav: " << config_json["webrtc_speech_initial_playout_wav"].asString(); // Log value
              opts.webrtc_speech_initial_playout_wav = expandHomePath(config_json["webrtc_speech_initial_playout_wav"].asString());
         }
         if (config_json.isMember("address") && config_json["address"].isString()) {
-             RTC_LOG(LS_INFO) << "JSON: Found address: " << config_json["address"].asString(); // Log value
+             RTC_LOG(LS_INFO) << "Config address: " << config_json["address"].asString(); // Log value
              opts.address = config_json["address"].asString();
         }
         if (config_json.isMember("turns") && config_json["turns"].isString()) {
-             RTC_LOG(LS_INFO) << "JSON: Found turns params";
+             RTC_LOG(LS_INFO) << "Config has turns params";
              opts.turns = config_json["turns"].asString();
         }
         if (config_json.isMember("vpn") && config_json["vpn"].isString()) {
-             RTC_LOG(LS_INFO) << "JSON: Found vpn: " << config_json["vpn"].asString(); // Log value
+             RTC_LOG(LS_INFO) << "Config vpn: " << config_json["vpn"].asString(); // Log value
              opts.vpn = config_json["vpn"].asString();
         }
 
         // Booleans
         if (config_json.isMember("encryption") && config_json["encryption"].isBool()) {
-             RTC_LOG(LS_INFO) << "JSON: Found encryption: " << config_json["encryption"].asBool(); // Log value
+             RTC_LOG(LS_INFO) << "Config encryption: " << config_json["encryption"].asBool(); // Log value
              opts.encryption = config_json["encryption"].asBool();
         }
         if (config_json.isMember("whisper") && config_json["whisper"].isBool()) {
-             RTC_LOG(LS_INFO) << "JSON: Found whisper: " << config_json["whisper"].asBool(); // Log value
+             RTC_LOG(LS_INFO) << "Config whisper: " << config_json["whisper"].asBool(); // Log value
              opts.whisper = config_json["whisper"].asBool();
         }
         if (config_json.isMember("llama") && config_json["llama"].isBool()) {
-             RTC_LOG(LS_INFO) << "JSON: Found llama: " << config_json["llama"].asBool(); // Log value
+             RTC_LOG(LS_INFO) << "Config llama: " << config_json["llama"].asBool(); // Log value
              opts.llama = config_json["llama"].asBool();
         }
         if (config_json.isMember("video") && config_json["video"].isBool()) {
-             RTC_LOG(LS_INFO) << "JSON: Found video: " << config_json["video"].asBool(); // Log value
+             RTC_LOG(LS_INFO) << "Config video: " << config_json["video"].asBool(); // Log value
              opts.video = config_json["video"].asBool();
         }
 
@@ -288,8 +302,6 @@ Options parseOptions(const std::vector<std::string>& args) {
       opts.mode = arg.substr(7);
     } else if (arg.find("--whisper_model=") == 0) {
       opts.whisper_model = arg.substr(16);  // Length of "--whisper_model="
-      if (!opts.whisper_model.empty() && !opts.whisper)
-        opts.whisper = true; // Enable whisper if model is provided
     } else if (arg.find("--llama_model=") == 0) {
       opts.llama_model = arg.substr(14);  // Length of "--llama_model="
     } else if (arg.find("--webrtc_cert_path=") == 0) {
@@ -309,20 +321,28 @@ Options parseOptions(const std::vector<std::string>& args) {
     else if (arg == "--help") {
       opts.help = true;
     } else if (arg == "--encryption") {
+      RTC_LOG(LS_INFO) << "Args set encryption on";
       opts.encryption = true;
     } else if (arg == "--no-encryption") {
+      RTC_LOG(LS_INFO) << "Args set encryption off";
       opts.encryption = false;
     } else if (arg == "--whisper") {
+      RTC_LOG(LS_INFO) << "Args set whisper on";
       opts.whisper = true;
     } else if (arg == "--no-whisper") {
+      RTC_LOG(LS_INFO) << "Args set whisper off";
       opts.whisper = false;
     } else if (arg == "--llama") {
+      RTC_LOG(LS_INFO) << "Args set llama on";
       opts.llama = true;
     } else if (arg == "--no-llama") {
+      RTC_LOG(LS_INFO) << "Args set llama off";
       opts.llama = false;
     } else if (arg == "--video") { 
+      RTC_LOG(LS_INFO) << "Args set video on";
       opts.video = true;
     } else if (arg == "--no-video") { 
+      RTC_LOG(LS_INFO) << "Args set video off";
       opts.video = false;
     }
     // Handle address in any position (must not be another known flag/option)
@@ -342,6 +362,8 @@ Options parseOptions(const std::vector<std::string>& args) {
     }
   }
   
+  RTC_LOG(LS_VERBOSE) << "After cmd line pass - opts.whisper: " << opts.whisper; // Log after 2nd pass
+
   // Final check: If mode is still empty after parsing everything, default to caller
   if(opts.mode.empty()) {
       opts.mode = "caller";
@@ -391,7 +413,7 @@ Options parseOptions(const std::vector<std::string>& args) {
     }
   }
 
-  RTC_LOG(LS_INFO) << "Final effective mode: " << opts.mode; // Log final mode value
+  RTC_LOG(LS_INFO) << "Mode used " << opts.mode; // Log final mode value
   return opts;
 }
 
@@ -420,4 +442,121 @@ std::string getUsage(const Options opts) {
    usage << "------------------------\\n"; // Footer
 
   return usage.str();
+}
+
+// CERTIFICATES
+
+// Function to create a self-signed certificate
+rtc::scoped_refptr<rtc::RTCCertificate> DirectCreateCertificate() {
+  auto key_params = rtc::KeyParams::RSA(2048);  // Use RSA with 2048-bit key
+  auto identity = rtc::SSLIdentity::Create("webrtc", key_params);
+  if (!identity) {
+    RTC_LOG(LS_ERROR) << "Failed to create SSL identity";
+    return nullptr;
+  }
+  return rtc::RTCCertificate::Create(std::move(identity));
+}
+
+// Function to read a file into a string
+std::string DirectReadFile(const std::string& path) {
+  std::ifstream file(path);
+  if (!file.is_open()) {
+    RTC_LOG(LS_ERROR) << "Failed to open file: " << path;
+    return "";
+  }
+  std::ostringstream oss;
+  oss << file.rdbuf();
+  return oss.str();
+}
+
+// Function to load a certificate from PEM files
+rtc::scoped_refptr<rtc::RTCCertificate> DirectLoadCertificate(
+    const std::string& cert_path,
+    const std::string& key_path) {
+  // Read the certificate and key files
+  std::string cert_pem = DirectReadFile(cert_path);
+  std::string key_pem = DirectReadFile(key_path);
+
+  if (cert_pem.empty() || key_pem.empty()) {
+    RTC_LOG(LS_ERROR) << "Failed to read certificate or key file";
+    return nullptr;
+  }
+
+  // Log the PEM strings for debugging
+  RTC_LOG(LS_VERBOSE) << "Certificate PEM:\n" << cert_pem;
+  RTC_LOG(LS_VERBOSE) << "Private Key PEM:\n" << key_pem;
+
+  // Create an SSL identity from the PEM strings
+  auto identity = rtc::SSLIdentity::CreateFromPEMStrings(key_pem, cert_pem);
+  if (!identity) {
+    RTC_LOG(LS_ERROR) << "Failed to create SSL identity from PEM strings";
+    return nullptr;
+  }
+
+  return rtc::RTCCertificate::Create(std::move(identity));
+}
+
+// Function to load certificate from environment variables or fall back to
+// CreateCertificate
+DIRECT_API rtc::scoped_refptr<rtc::RTCCertificate> DirectLoadCertificateFromEnv(Options opts) {
+  // Get paths from environment variables
+  const char* cert_path = opts.webrtc_cert_path.empty()
+                              ? std::getenv("WEBRTC_CERT_PATH")
+                              : opts.webrtc_cert_path.c_str();
+  const char* key_path = opts.webrtc_key_path.empty()
+                             ? std::getenv("WEBRTC_KEY_PATH")
+                             : opts.webrtc_key_path.c_str();
+
+  if (cert_path && key_path) {
+    RTC_LOG(LS_INFO) << "Loading certificate from " << cert_path << " and "
+                     << key_path;
+    auto certificate = DirectLoadCertificate(cert_path, key_path);
+    if (certificate) {
+      return certificate;
+    }
+    RTC_LOG(LS_WARNING) << "Failed to load certificate from files; falling "
+                           "back to CreateCertificate";
+  } else {
+    RTC_LOG(LS_WARNING)
+        << "Environment variables WEBRTC_CERT_PATH and WEBRTC_KEY_PATH not "
+           "set; falling back to CreateCertificate";
+  }
+
+  // Fall back to CreateCertificate
+  return DirectCreateCertificate();
+}
+
+DIRECT_API uint32_t DirectCreateRandomId() {
+  return rtc::CreateRandomId();
+}
+
+DIRECT_API std::string DirectCreateRandomUuid() {
+  return rtc::CreateRandomUuid();
+}
+
+DIRECT_API void DirectThreadSetName(rtc::Thread* thread, const char* name) {
+  if(thread && name && *name) {
+    thread->SetName(name, nullptr);
+  }
+}
+
+DIRECT_API webrtc::IceCandidateInterface* DirectCreateIceCandidate(
+  const char* sdp_mid,
+  int sdp_mline_index,
+  const char* sdp,
+  webrtc::SdpParseError* error) {
+  
+  std::string _sdp_mid = std::string(sdp_mid);
+  std::string _sdp = std::string(sdp);
+  return webrtc::CreateIceCandidate(_sdp_mid, sdp_mline_index, _sdp, error);                                                   
+}
+
+
+DIRECT_API std::unique_ptr<webrtc::SessionDescriptionInterface> DirectCreateSessionDescription(
+    webrtc::SdpType type,
+    const char* sdp,
+    webrtc::SdpParseError* error) {
+
+  std::string remote_sdp = std::string(sdp);
+  return webrtc::CreateSessionDescription(type, remote_sdp, error);
 }

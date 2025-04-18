@@ -104,16 +104,17 @@ inline void rtrim(std::string &s) {
 
 void ttsAudioCallback(bool success, const uint16_t* buffer, size_t buffer_size, void* user_data) {
   // Handle audio buffer here
-  RTC_LOG(LS_INFO) << "Generated " << buffer_size << " audio samples (" << buffer_size / 16000 << " s) at " << WhillatsTTS::getSampleRate() << "Hz";
   if(success) {
     WhisperAudioDevice* audio_device = static_cast<WhisperAudioDevice*>(user_data);
+    RTC_LOG(LS_VERBOSE) << "Generated " << buffer_size << " audio samples (" 
+      << buffer_size / 16000 << " s)";
     audio_device->SetTTSBuffer(buffer, buffer_size);
   }
 }
 
 void whisperResponseCallback(bool success, const char* response, void* user_data) {
   // Handle response here
-  RTC_LOG(LS_VERBOSE) << "Whisper response via callback: " << response;
+  RTC_LOG(LS_INFO) << "Whisper response via callback: " << response;
   if(success) {
     WhisperAudioDevice* audio_device = static_cast<WhisperAudioDevice*>(user_data);
     if(audio_device->_llaming)
@@ -147,7 +148,8 @@ void WhisperAudioDevice::speakText(const std::string& text) {
 void WhisperAudioDevice::askLlama(const std::string& text) {
 #if defined(LLAMA_ENABLED)
   if(_llama_device) {
-     _llama_device->askLlama(text.c_str()); // send to llama text queue
+    RTC_LOG(LS_INFO) << "Asking llama: " << text;
+    _llama_device->askLlama(text.c_str()); // send to llama text queue
   }  
 #endif  
 }
@@ -291,7 +293,7 @@ void WhisperAudioDevice::SetTTSBuffer(const uint16_t* buffer, size_t buffer_size
   }
   _ttsBuffer = std::vector<uint16_t>(buffer, buffer + buffer_size);
   _ttsIndex = 0; // Reset index for new buffer
-  RTC_LOG(LS_INFO) << "Set new TTS buffer with " << buffer_size << " samples";
+  RTC_LOG(LS_VERBOSE) << "Set new TTS buffer with " << buffer_size << " samples";
 }
 
 bool WhisperAudioDevice::RecThreadProcess() {
@@ -428,7 +430,7 @@ int32_t WhisperAudioDevice::InitPlayout() {
 
   if(!_whisperModelFilename.empty()) {
 
-    RTC_LOG(LS_VERBOSE) << "Whisper model: '" << _whisperModelFilename << "'";
+    RTC_LOG(LS_INFO) << "Whisper model: '" << _whisperModelFilename << "'";
     WhillatsSetResponseCallback whisperCallback(whisperResponseCallback, this);
     _whisper_transcriber.reset(new WhillatsTranscriber(_whisperModelFilename.c_str(), whisperCallback));
 
@@ -439,7 +441,7 @@ int32_t WhisperAudioDevice::InitPlayout() {
   } 
 
   #if defined (LLAMA_ENABLED)
-  RTC_LOG(LS_VERBOSE) << "Llama model: '" << _llamaModelFilename << "'";
+  RTC_LOG(LS_INFO) << "Llama model: '" << _llamaModelFilename << "'";
   WhillatsSetResponseCallback llamaCallback(llamaResponseCallback, this);
   _llama_device.reset(new WhillatsLlama(_llamaModelFilename.c_str(), llamaCallback));
 

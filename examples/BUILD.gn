@@ -996,11 +996,13 @@ if (!build_with_chromium) {
           # Add paths containing the XCFrameworks
           # Ensure these paths are correct relative to the build output directory
           framework_dirs = [
-            rebase_path("//src/modules/third_party/whillats/third_party/whisper.cpp/build-ios-device/framework", root_build_dir),
-            rebase_path("//src/modules/third_party/whillats/third_party/llama.cpp/build-ios-device/framework", root_build_dir),
+            rebase_path("//src/modules/third_party/whillats/build-ios/lib/Release", root_build_dir),
+            rebase_path("//src/modules/third_party/whillats/third_party/whisper.cpp/build-apple/whisper.xcframework/ios-arm64", root_build_dir),
+            rebase_path("//src/modules/third_party/whillats/third_party/llama.cpp/build-apple/llama.xcframework/ios-arm64", root_build_dir),
           ]
           # Add the framework names (must end with .framework extension)
           frameworks += [
+            "whillats.framework",
             "whisper.framework",
             "llama.framework",
           ]

@@ -12,9 +12,13 @@
 
 #include "rtc_base/network.h"
 #include "rtc_base/ip_address.h"
+#include <unistd.h> // For usleep
 
 #include "direct.h"
 #include "option.h"
+
+// String split from option.cc
+std::vector<std::string> stringSplit(std::string input, std::string delimiter);
 
 void DirectApplication::rtcInitializeSSL() {
   rtc::InitializeSSL();
@@ -30,95 +34,17 @@ rtc::IPAddress IPFromString(absl::string_view str) {
   return ip;
 }
 
-// Function to create a self-signed certificate
-rtc::scoped_refptr<rtc::RTCCertificate> CreateCertificate() {
-  auto key_params = rtc::KeyParams::RSA(2048);  // Use RSA with 2048-bit key
-  auto identity = rtc::SSLIdentity::Create("webrtc", key_params);
-  if (!identity) {
-    RTC_LOG(LS_ERROR) << "Failed to create SSL identity";
-    return nullptr;
-  }
-  return rtc::RTCCertificate::Create(std::move(identity));
-}
-
-// Function to read a file into a string
-std::string ReadFile(const std::string& path) {
-  std::ifstream file(path);
-  if (!file.is_open()) {
-    RTC_LOG(LS_ERROR) << "Failed to open file: " << path;
-    return "";
-  }
-  std::ostringstream oss;
-  oss << file.rdbuf();
-  return oss.str();
-}
-
-// Function to load a certificate from PEM files
-rtc::scoped_refptr<rtc::RTCCertificate> LoadCertificate(
-    const std::string& cert_path,
-    const std::string& key_path) {
-  // Read the certificate and key files
-  std::string cert_pem = ReadFile(cert_path);
-  std::string key_pem = ReadFile(key_path);
-
-  if (cert_pem.empty() || key_pem.empty()) {
-    RTC_LOG(LS_ERROR) << "Failed to read certificate or key file";
-    return nullptr;
-  }
-
-  // Log the PEM strings for debugging
-  RTC_LOG(LS_VERBOSE) << "Certificate PEM:\n" << cert_pem;
-  RTC_LOG(LS_VERBOSE) << "Private Key PEM:\n" << key_pem;
-
-  // Create an SSL identity from the PEM strings
-  auto identity = rtc::SSLIdentity::CreateFromPEMStrings(key_pem, cert_pem);
-  if (!identity) {
-    RTC_LOG(LS_ERROR) << "Failed to create SSL identity from PEM strings";
-    return nullptr;
-  }
-
-  return rtc::RTCCertificate::Create(std::move(identity));
-}
-
-// Function to load certificate from environment variables or fall back to
-// CreateCertificate
-rtc::scoped_refptr<rtc::RTCCertificate> LoadCertificateFromEnv(Options opts) {
-  // Get paths from environment variables
-  const char* cert_path = opts.webrtc_cert_path.empty()
-                              ? std::getenv("WEBRTC_CERT_PATH")
-                              : opts.webrtc_cert_path.c_str();
-  const char* key_path = opts.webrtc_key_path.empty()
-                             ? std::getenv("WEBRTC_KEY_PATH")
-                             : opts.webrtc_key_path.c_str();
-
-  if (cert_path && key_path) {
-    RTC_LOG(LS_INFO) << "Loading certificate from " << cert_path << " and "
-                     << key_path;
-    auto certificate = LoadCertificate(cert_path, key_path);
-    if (certificate) {
-      return certificate;
-    }
-    RTC_LOG(LS_WARNING) << "Failed to load certificate from files; falling "
-                           "back to CreateCertificate";
-  } else {
-    RTC_LOG(LS_WARNING)
-        << "Environment variables WEBRTC_CERT_PATH and WEBRTC_KEY_PATH not "
-           "set; falling back to CreateCertificate";
-  }
-
-  // Fall back to CreateCertificate
-  return CreateCertificate();
-}
-
 // DirectApplication Implementation
 DirectApplication::DirectApplication() {
   pss_ = std::make_unique<rtc::PhysicalSocketServer>();
 
   main_thread_ = rtc::Thread::CreateWithSocketServer();
   main_thread_->socketserver()->SetMessageQueue(main_thread_.get());
-  main_thread_->SetName("Main", nullptr);
-  main_thread_->WrapCurrent();
+  DirectThreadSetName(main_thread(), "Main");
 
+  //main_thread_->WrapCurrent();
+
+  ws_thread_ = rtc::Thread::Create();
   worker_thread_ = rtc::Thread::Create();
   signaling_thread_ = rtc::Thread::Create();
   network_thread_ = std::make_unique<rtc::Thread>(pss_.get());
@@ -133,18 +59,30 @@ void DirectApplication::CleanupSocketServer() {
     return;
   }
 
-  // Stop threads in reverse order
+  // Stop threads in reverse order with a small delay to ensure graceful shutdown
   if (network_thread_) {
+    network_thread_->Quit();
     network_thread_->Stop();
+    usleep(50000); // Small delay (50ms) to allow pending operations to complete
     network_thread_.reset();
   }
   if (worker_thread_) {
+    worker_thread_->Quit();
     worker_thread_->Stop();
+    usleep(50000);
     worker_thread_.reset();
   }
   if (signaling_thread_) {
+    signaling_thread_->Quit();
     signaling_thread_->Stop();
+    usleep(50000);
     signaling_thread_.reset();
+  }
+  if (ws_thread_) {
+    ws_thread_->Quit();
+    ws_thread_->Stop();
+    usleep(50000);
+    ws_thread_.reset();
   }
   if (main_thread_) {
     main_thread_->UnwrapCurrent();
@@ -176,7 +114,18 @@ void DirectApplication::Run() {
 
   // Final cleanup
   CleanupSocketServer();
-  
+}
+
+void DirectApplication::RunOnBackgroundThread() {
+  RTC_DCHECK(!rtc::Thread::Current()); // Ensure not on a WebRTC thread yet
+
+  // Use main_thread_ instead of creating a new thread to avoid conflicts
+  main_thread_->PostTask([this]() {
+    while (!should_quit_) {
+      main_thread_->ProcessMessages(100); // Process messages with 100ms timeout
+    }
+    CleanupSocketServer();
+  });
 }
 
 DirectApplication::~DirectApplication() {
@@ -206,7 +155,7 @@ bool DirectApplication::CreatePeerConnection(Options opts_) {
 
   // Create/get certificate if needed
   if (opts_.encryption && !certificate_) {
-    certificate_ = LoadCertificateFromEnv(opts_);
+    certificate_ = DirectLoadCertificateFromEnv(opts_);
     certificate_stats_ = certificate_->GetSSLCertificate().GetStats();
     RTC_LOG(LS_INFO) << "Using certificate with fingerprint: "
                       << certificate_stats_->fingerprint << " and algorithm: "
@@ -291,7 +240,7 @@ bool DirectApplication::CreatePeerConnection(Options opts_) {
   webrtc::PeerConnectionFactory::Options options = {};
   if(opts_.encryption) {
       RTC_LOG(LS_INFO) << "Encryption is enabled!";
-      auto certificate = LoadCertificateFromEnv(opts_);
+      auto certificate = DirectLoadCertificateFromEnv(opts_);
       config.certificates.push_back(certificate);
   } else {
       // WARNING! FOLLOWING CODE IS FOR DEBUG ONLY!

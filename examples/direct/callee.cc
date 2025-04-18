@@ -12,6 +12,10 @@
 
 #include "direct.h"
 
+// Function to parse IP address and port from a string in the format "IP:PORT"
+// From option.cc
+bool ParseIpAndPort(const std::string& ip_port, std::string& ip, int& port);
+
 // DirectCallee Implementation
 DirectCallee::DirectCallee(Options opts) 
     : DirectPeer(opts)

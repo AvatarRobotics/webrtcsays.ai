@@ -76,7 +76,6 @@ class LambdaCreateSessionDescriptionObserver
     on_success_(absl::WrapUnique(desc));
   }
   void OnFailure(webrtc::RTCError error) override {
-    RTC_LOG(LS_ERROR) << "CreateOffer failed: " << error.message();
   }
 
  private:
@@ -134,18 +133,23 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
 
   // Run the application event loop
   void Run();
-  rtc::PhysicalSocketServer* pss() { return pss_.get(); }
+  void RunOnBackgroundThread();
+
+  // Signal to quit the application
+  void SignalQuit() { should_quit_ = true; }
 
   static void DIRECT_API rtcInitializeSSL();
   static void DIRECT_API rtcCleanupSSL();
 
  protected:
+  rtc::PhysicalSocketServer* pss() { return pss_.get(); }
     
   // Thread getters for derived classes
   rtc::Thread* signaling_thread() { return signaling_thread_.get(); }
   rtc::Thread* worker_thread() { return worker_thread_.get(); }
   rtc::Thread* network_thread() { return network_thread_.get(); }
   rtc::Thread* main_thread() { return main_thread_.get(); }
+  rtc::Thread* ws_thread() { return ws_thread_.get(); }
   webrtc::PeerConnectionFactoryDependencies dependencies_ = {};
   rtc::scoped_refptr<webrtc::AudioDeviceModule> audio_device_module_;
   std::unique_ptr<webrtc::TaskQueueBase, webrtc::TaskQueueDeleter> audio_task_queue_;
@@ -161,6 +165,11 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
     return certificate_stats_.get();
   }
   rtc::RTCCertificate* certificate() const { return certificate_.get(); }
+  void UpdateCertificateStats() {
+    if (certificate_) {
+      certificate_stats_ = certificate_->GetSSLCertificate().GetStats();
+    }
+  }
 
   void CleanupSocketServer();
 
@@ -172,8 +181,10 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
       worker_thread_->Quit();
     if (signaling_thread_)
       signaling_thread_->Quit();
+    if (ws_thread_)
+      ws_thread_->Quit();
     if (main_thread_)
-      main_thread_->Quit();
+        main_thread_->Quit();
   }
 
   // Common message handling
@@ -204,6 +215,8 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
   std::unique_ptr<rtc::Thread> signaling_thread_;
   std::unique_ptr<rtc::Thread> worker_thread_;
   std::unique_ptr<rtc::Thread> network_thread_;
+  std::unique_ptr<rtc::Thread> ws_thread_;
+  std::unique_ptr<rtc::Thread> background_thread_;
 
   // Ensure methods are called on correct thread
   webrtc::SequenceChecker sequence_checker_;

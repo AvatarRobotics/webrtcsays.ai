@@ -527,45 +527,35 @@ if (!build_with_chromium) {
     include_dirs = [
       "//modules/third_party/whillats/src",
     ]
-    if(is_mac) {
+    if (is_ios) {
+      # Add include path for whillats public headers
+      include_dirs += [
+        "//modules/third_party/whillats/src",
+      ]
+      # DO NOT compile whillats sources directly here
+      # sources += [
+      #   "//modules/third_party/whillats/src/whillats.h",
+      #   "//modules/third_party/whillats/src/whillats.cc",
+      #   "//modules/third_party/whillats/src/whisper_transcription.h",
+      #   "//modules/third_party/whillats/src/whisper_transcription.cc",
+      #   "//modules/third_party/whillats/src/llama_device_base.h",
+      #   "//modules/third_party/whillats/src/llama_device_base.cc",
+      # ]
+
+      # Add paths containing the frameworks needed
+      framework_dirs = [
+        "//modules/third_party/whillats/build-ios/lib/Release", # Path to whillats.framework
+        # Assuming whisper & llama are linked within whillats.framework via CMake
+      ]
+      # Add the framework names
       frameworks = [
+        "whillats.framework", # Link the framework built by CMake
+        # System Frameworks needed by whillats or its deps (confirm which are needed)
+        "Foundation.framework",
         "Accelerate.framework",
         "Metal.framework",
         "MetalKit.framework",
-      ]
-      lib_dirs = [ "//modules/third_party/whillats/build/bin" ]
-      libs = [ "whillats" ]
-    } else if (is_linux) {
-      # Only add these for Linux, not other non-macOS platforms like iOS
-      libs += [
-        "gomp",
-        "stdc++"
-      ]
-    }
-    if (is_ios) {
-      # Add Whillats sources
-      include_dirs += [
-        "//modules/third_party/whillats/third_party/whisper.cpp/include",
-        "//modules/third_party/whillats/third_party/llama.cpp/include",
-        "//modules/third_party/whillats/third_party/llama.cpp/ggml/include",
-      ]
-      sources += [
-        "//modules/third_party/whillats/src/whillats.h",
-        "//modules/third_party/whillats/src/whillats.cc",
-        "//modules/third_party/whillats/src/whisper_transcription.h",
-        "//modules/third_party/whillats/src/whisper_transcription.cc",
-        "//modules/third_party/whillats/src/llama_device_base.h",
-        "//modules/third_party/whillats/src/llama_device_base.cc",
-      ]
-      # Add paths containing the XCFrameworks
-      framework_dirs = [
-        "//modules/third_party/whillats/third_party/whisper.cpp/build-ios-device/framework",
-        "//modules/third_party/whillats/third_party/llama.cpp/build-ios-device/framework",
-      ]
-      # Add the framework names (must end with .framework extension)
-      frameworks = [
-        "whisper.framework",
-        "llama.framework",
+        "AudioToolbox.framework", # Likely needed for espeak/audio output
       ]
     }
     cflags += [ "-std=c++11", "-Wno-incompatible-pointer-types-discards-qualifiers" ] 
