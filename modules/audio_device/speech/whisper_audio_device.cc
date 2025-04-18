@@ -288,7 +288,7 @@ int32_t WhisperAudioDevice::StopRecording() {
 void WhisperAudioDevice::SetTTSBuffer(const uint16_t* buffer, size_t buffer_size) {
   std::lock_guard<std::mutex> lock(_queueMutex);
   if (!_ttsBuffer.empty() && _ttsIndex < _ttsBuffer.size()) {
-    RTC_LOG(LS_WARNING) << "TTS buffer still playing, delaying new buffer";
+    RTC_LOG(LS_VERBOSE) << "TTS buffer still playing, delaying new buffer";
     return; // Wait until current buffer is done
   }
   _ttsBuffer = std::vector<uint16_t>(buffer, buffer + buffer_size);

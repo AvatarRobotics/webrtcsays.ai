@@ -186,6 +186,8 @@ bool DirectApplication::CreatePeerConnection(Options opts_) {
 #ifdef WEBRTC_SPEECH_DEVICES
   if (opts_.whisper) {
     kAudioDeviceModuleType = webrtc::AudioDeviceModule::kSpeechAudio;
+    webrtc::SpeechAudioDeviceFactory::SetWhisperModelFilename(opts_.whisper_model);
+    webrtc::SpeechAudioDeviceFactory::SetLlamaModelFilename(opts_.llama_model);
   }
 #endif // WEBRTC_SPEECH_DEVICES
 
