@@ -10,6 +10,18 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
+#include <string>
+
+#include "api/peer_connection_interface.h"
+#include "api/rtc_event_log/rtc_event_log.h"
+#include "api/task_queue/default_task_queue_factory.h"
+#include "media/engine/internal_decoder_factory.h"
+#include "media/engine/internal_encoder_factory.h"
+#include "modules/audio_device/include/audio_device.h"
+#include "modules/audio_processing/include/audio_processing.h"
+#include "modules/video_capture/video_capture_factory.h"
+#include "pc/video_track_source.h"
+#include "rtc_base/ref_counted_object.h"
 
 #include "direct.h"
 
@@ -24,18 +36,13 @@ DirectPeer::~DirectPeer() {
 }
 
 void DirectPeer::Shutdown() {
-    // Clear observers first
-    create_session_observer_ = nullptr;
-    set_local_description_observer_ = nullptr;
-    
-    // Clear peer connection
+    RTC_LOG(LS_INFO) << "Shutting down peer connection";
     if (peer_connection_) {
         peer_connection_->Close();
+        peer_connection_ = nullptr;
     }
-    peer_connection_ = nullptr;
-    
-    // Clear factory after peer connection
-    peer_connection_factory_ = nullptr;
+    // Do not reset peer_connection_factory_ to allow reconnection
+    RTC_LOG(LS_INFO) << "Peer connection closed, but factory preserved for potential reconnection";
 }
 
 void DirectPeer::Start() {
@@ -145,7 +152,7 @@ void DirectPeer::HandleMessage(rtc::AsyncPacketSocket* socket,
           AddIceCandidate(candidate);
       } else {
           RTC_LOG(LS_ERROR) << "Invalid ICE candidate received";
-      }
+      }      
    } else {
        DirectApplication::HandleMessage(socket, message, remote_addr);
    }

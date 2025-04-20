@@ -111,35 +111,31 @@ class LambdaSetRemoteDescriptionObserver
   std::function<void(webrtc::RTCError)> on_complete_;
 };
 
-// Function to create a self-signed certificate
-rtc::scoped_refptr<rtc::RTCCertificate> CreateCertificate();
-
-// Function to load a certificate from PEM files
-rtc::scoped_refptr<rtc::RTCCertificate> LoadCertificate(const std::string& cert_path, const std::string& key_path);
-
-// Function to load certificate from environment variables or fall back to CreateCertificate
-rtc::scoped_refptr<rtc::RTCCertificate> LoadCertificateFromEnv(Options opts);
-
-
-
 class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
  public:
   DirectApplication();
   virtual ~DirectApplication();
 
   // Initialize threads and basic WebRTC infrastructure
-  bool Initialize();
+  bool DIRECT_API Initialize();
   bool CreatePeerConnection(Options opts);
 
   // Run the application event loop
-  void Run();
-  void RunOnBackgroundThread();
+  void DIRECT_API Run();
+  void DIRECT_API RunOnBackgroundThread();
 
   // Signal to quit the application
   void SignalQuit() { should_quit_ = true; }
 
+  // Disconnect active connections without destroying core resources
+  virtual void DIRECT_API Disconnect();
+
   static void DIRECT_API rtcInitializeSSL();
   static void DIRECT_API rtcCleanupSSL();
+
+  // Override WrapSocket to track created sockets
+  rtc::Socket* WrapSocket(SOCKET s);
+  rtc::Socket* CreateSocket(int family, int type);
 
  protected:
   rtc::PhysicalSocketServer* pss() { return pss_.get(); }
@@ -171,7 +167,7 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
     }
   }
 
-  void CleanupSocketServer();
+  void Cleanup();
 
   void QuitThreads() {
     should_quit_ = true;  // Add this member to DirectApplication class
@@ -224,6 +220,9 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
 
   // VPN addresses
   std::vector<std::string> vpns_;
+
+  // Track all sockets created by WrapSocket or CreateSocket
+  std::vector<rtc::Socket*> tracked_sockets_;
 };
 
 class DIRECT_API DirectPeer : public DirectApplication {
@@ -312,6 +311,7 @@ class RTC_EXPORT DIRECT_API DirectCaller : public DirectPeer, public sigslot::ha
   // Connect and send messages
   bool Connect();
   // bool SendMessage(const std::string& message);
+  virtual void DIRECT_API Disconnect() override;
 
  private:
   // Called when data is received on the socket

@@ -10,6 +10,15 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
+#include <string>
+#include <memory>
+#include <cstring> // For memset
+#include <unistd.h> // For close
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <errno.h> // For errno
+
 #include "direct.h"
 
 // Function to parse IP address and port from a string in the format "IP:PORT"
@@ -31,7 +40,7 @@ DirectCallee::~DirectCallee() {
     if (listen_socket_) {
         listen_socket_.reset();
     }
-    CleanupSocketServer();
+    Cleanup();
 }
 
 bool DirectCallee::StartListening() {
@@ -84,7 +93,7 @@ bool DirectCallee::StartListening() {
     return network_thread()->BlockingCall(std::move(task));
 }
 
-void DirectCallee::OnNewConnection(rtc::AsyncListenSocket* socket, 
+void DirectCallee::OnNewConnection(rtc::AsyncListenSocket* listen_socket, 
                                  rtc::AsyncPacketSocket* new_socket) {
     RTC_LOG(LS_INFO) << "New connection received";
     
@@ -93,25 +102,40 @@ void DirectCallee::OnNewConnection(rtc::AsyncListenSocket* socket,
         return;
     }
 
-    tcp_socket_.reset(static_cast<rtc::AsyncTCPSocket*>(new_socket));
-    RTC_LOG(LS_INFO) << "Connection accepted from " << tcp_socket_->GetRemoteAddress().ToString();
+    // Use a pointer to the specific socket for this connection
+    rtc::AsyncTCPSocket* current_client_socket = static_cast<rtc::AsyncTCPSocket*>(new_socket);
+    RTC_LOG(LS_INFO) << "Connection accepted from " << current_client_socket->GetRemoteAddress().ToString();
 
-    tcp_socket_->RegisterReceivedPacketCallback(
-        [this](rtc::AsyncPacketSocket* socket, const rtc::ReceivedPacket& packet) {
-            RTC_LOG(LS_INFO) << "Received packet of size: " << packet.payload().size();
-            OnMessage(socket, packet.payload().data(), packet.payload().size(), 
-                     packet.source_address());
+    // Overwrite the base class socket - assumes only one active connection for SendMessage
+    // If supporting multiple clients, this needs rethinking.
+    tcp_socket_.reset(current_client_socket);
+
+    // Register callback on the specific socket for this connection
+    current_client_socket->RegisterReceivedPacketCallback(
+        // Capture the specific socket pointer for this callback instance
+        [this, current_client_socket](rtc::AsyncPacketSocket* socket_param, const rtc::ReceivedPacket& packet) {
+            // Verify the callback is running for the socket it was registered on
+            if (socket_param != current_client_socket) {
+                 RTC_LOG(LS_WARNING) << "Received packet on unexpected socket instance. Ignoring.";
+                 return;
+            }
+            RTC_LOG(LS_INFO) << "Received packet of size: " << packet.payload().size() << " on socket " << current_client_socket;
+            // Pass the correct socket instance (current_client_socket) to OnMessage
+            OnMessage(current_client_socket, 
+                      reinterpret_cast<const unsigned char*>(packet.payload().data()), 
+                      packet.payload().size(), 
+                      packet.source_address());
         });
     
-    RTC_LOG(LS_INFO) << "Callback registered for incoming messages";
+    RTC_LOG(LS_INFO) << "Callback registered for incoming messages on socket " << current_client_socket;
 }
 
 void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
                            const unsigned char* data,
                            size_t len,
                            const rtc::SocketAddress& remote_addr) {
-    std::string message((const char*)data, len);
-    RTC_LOG(LS_INFO) << "Callee received: " << message;
+    std::string message(reinterpret_cast<const char*>(data), len);
+    RTC_LOG(LS_INFO) << "Callee received: " << message << " from " << remote_addr.ToString();
 
     if (message == "HELLO") {
         SendMessage("WELCOME");
@@ -119,6 +143,17 @@ void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
         SendMessage("OK");
         Shutdown();
         QuitThreads();
+    } else if (message == "CANCEL") {
+        RTC_LOG(LS_INFO) << "Received CANCEL from " << remote_addr.ToString() << ". Disconnecting this client.";
+        if (socket == tcp_socket_.get()) {
+            tcp_socket_->Close();
+            tcp_socket_.reset();
+            Disconnect();
+        } else {
+            RTC_LOG(LS_WARNING) << "Received CANCEL on an unexpected or outdated socket pointer";
+        }
+        // Ensure the listen_socket_ continues to accept new connections
+        RTC_LOG(LS_INFO) << "Continuing to listen for new connections after CANCEL.";
     } else {
         HandleMessage(socket, message, remote_addr);
     }

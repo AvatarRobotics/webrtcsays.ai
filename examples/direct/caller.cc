@@ -10,6 +10,15 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
+#include <string>
+#include <memory>
+#include <cstring> // For memset
+#include <unistd.h> // For close
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <errno.h> // For errno
+
 #include "direct.h"
 
 // Function to parse IP address and port from a string in the format "IP:PORT"
@@ -26,9 +35,7 @@ DirectCaller::DirectCaller(Options opts)
 }
 
 DirectCaller::~DirectCaller() {
-    if (tcp_socket_) {
-        tcp_socket_->Close();
-    }
+    // tcp_socket_ cleanup is handled by DirectApplication base class destructor/Cleanup
 }
 
 bool DirectCaller::Connect() {
@@ -42,13 +49,13 @@ bool DirectCaller::Connect() {
 
         // Setup local address
         struct sockaddr_in local_addr;
-        memset(&local_addr, 0, sizeof(local_addr));
+        ::memset(&local_addr, 0, sizeof(local_addr));
         local_addr.sin_family = AF_INET;
         local_addr.sin_port = 0;
         local_addr.sin_addr.s_addr = INADDR_ANY;
 
         // Bind
-        if (::bind(raw_socket, (struct sockaddr*)&local_addr, sizeof(local_addr)) < 0) {
+        if (::bind(raw_socket, reinterpret_cast<struct sockaddr*>(&local_addr), sizeof(local_addr)) < 0) {
             RTC_LOG(LS_ERROR) << "Failed to bind raw socket, errno: " << errno;
             ::close(raw_socket);
             return false;
@@ -56,15 +63,15 @@ bool DirectCaller::Connect() {
 
         // Setup remote address
         struct sockaddr_in remote_addr;
-        memset(&remote_addr, 0, sizeof(remote_addr));
+        ::memset(&remote_addr, 0, sizeof(remote_addr));
         remote_addr.sin_family = AF_INET;
         remote_addr.sin_port = htons(remote_addr_.port());
-        inet_pton(AF_INET, remote_addr_.ipaddr().ToString().c_str(), &remote_addr.sin_addr);
+        ::inet_pton(AF_INET, remote_addr_.ipaddr().ToString().c_str(), &remote_addr.sin_addr);
 
         RTC_LOG(LS_INFO) << "Attempting to connect to " << remote_addr_.ToString();
 
         // Connect
-        if (::connect(raw_socket, (struct sockaddr*)&remote_addr, sizeof(remote_addr)) < 0) {
+        if (::connect(raw_socket, reinterpret_cast<struct sockaddr*>(&remote_addr), sizeof(remote_addr)) < 0) {
             RTC_LOG(LS_ERROR) << "Failed to connect raw socket, errno: " << errno;
             ::close(raw_socket);
             return false;
@@ -72,19 +79,23 @@ bool DirectCaller::Connect() {
 
         RTC_LOG(LS_INFO) << "Raw socket connected successfully";
 
-        // Wrap the connected socket
-        auto wrapped_socket = pss()->WrapSocket(raw_socket);
+        // Wrap the connected socket using DirectApplication::WrapSocket to track it
+        auto* wrapped_socket = WrapSocket(raw_socket); // Use inherited WrapSocket
         if (!wrapped_socket) {
             RTC_LOG(LS_ERROR) << "Failed to wrap socket, errno: " << errno;
             ::close(raw_socket);
             return false;
         }
 
+        // Use inherited tcp_socket_
         tcp_socket_.reset(new rtc::AsyncTCPSocket(wrapped_socket));
         tcp_socket_->RegisterReceivedPacketCallback(
             [this](rtc::AsyncPacketSocket* socket, const rtc::ReceivedPacket& packet) {
-                OnMessage(socket, packet.payload().data(), packet.payload().size(), 
-                         packet.source_address());
+                // Access data using packet.payload()
+                OnMessage(socket, 
+                          reinterpret_cast<const unsigned char*>(packet.payload().data()), 
+                          packet.payload().size(), 
+                          packet.source_address());
             });
         OnConnect(tcp_socket_.get());
 
@@ -104,13 +115,13 @@ void DirectCaller::OnMessage(rtc::AsyncPacketSocket* socket,
                            const unsigned char* data,
                            size_t len,
                            const rtc::SocketAddress& remote_addr) {
-    std::string message((const char*)data, len);
+    std::string message(reinterpret_cast<const char*>(data), len);
     RTC_LOG(LS_INFO) << "Caller received: " << message;
 
     if (message == "WELCOME") {
        SendMessage("INIT");
     } 
-    if (message == "WAITING") {
+    else if (message == "WAITING") { // Changed from if to else if for clarity
         Start();
     } 
     else if (message == "OK") {
@@ -119,4 +130,9 @@ void DirectCaller::OnMessage(rtc::AsyncPacketSocket* socket,
     } else {
         HandleMessage(socket, message, remote_addr);
     }
+}
+
+void DirectCaller::Disconnect() {
+    RTC_LOG(LS_INFO) << "Caller signaling disconnect, sending CANCEL.";
+    SendMessage("CANCEL"); // Send CANCEL to signal disconnect without shutdown
 }

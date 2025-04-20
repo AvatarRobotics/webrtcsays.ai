@@ -124,6 +124,11 @@ void whisperResponseCallback(bool success, const char* response, void* user_data
   }
 }
 
+void languageResponseCallback(bool success, const char* language, void* user_data) {
+  // Handle response here
+  RTC_LOG(LS_INFO) << "Language response via callback: " << language;
+}
+
 void llamaResponseCallback(bool success, const char* response, void* user_data) {
   // Handle response here
   RTC_LOG(LS_VERBOSE) << "Llama response via callback: " << response;
@@ -348,7 +353,7 @@ bool WhisperAudioDevice::RecThreadProcess() {
 
       if (shouldSynthesize) {
         RTC_LOG(LS_INFO) << "Queueing TTS text: " << textToSpeak;
-        _tts->queueText(textToSpeak.c_str());
+        _tts->queueText(textToSpeak.c_str(), _whisper_transcriber->getLanguage().c_str());
       } else {
         // Send silence if no audio or text is available
         if (_recordingBuffer != nullptr) {
@@ -432,7 +437,8 @@ int32_t WhisperAudioDevice::InitPlayout() {
 
     RTC_LOG(LS_INFO) << "Whisper model: '" << _whisperModelFilename << "'";
     WhillatsSetResponseCallback whisperCallback(whisperResponseCallback, this);
-    _whisper_transcriber.reset(new WhillatsTranscriber(_whisperModelFilename.c_str(), whisperCallback));
+    WhillatsSetLanguageCallback languageCallback(languageResponseCallback, this);
+    _whisper_transcriber.reset(new WhillatsTranscriber(_whisperModelFilename.c_str(), whisperCallback, languageCallback));
 
     if(_whisper_transcriber && _whisper_transcriber->start()) {
       _whispering = true;

@@ -53,9 +53,9 @@ DirectApplication::DirectApplication() {
   peer_connection_factory_ = nullptr;
 }
 
-void DirectApplication::CleanupSocketServer() {
+void DirectApplication::Cleanup() {
   if (rtc::Thread::Current() != main_thread_.get()) {
-    main_thread_->PostTask([this]() { CleanupSocketServer(); });
+    main_thread_->PostTask([this]() { Cleanup(); });
     return;
   }
 
@@ -85,13 +85,65 @@ void DirectApplication::CleanupSocketServer() {
     ws_thread_.reset();
   }
   if (main_thread_) {
-    main_thread_->UnwrapCurrent();
     main_thread_.reset();
   }
 
   // Clear remaining members
   network_manager_.reset();
   socket_factory_.reset();
+  
+  // Close all tracked sockets to ensure they are removed from PhysicalSocketServer
+  RTC_LOG(LS_INFO) << "Closing tracked sockets";
+  for (auto* socket : tracked_sockets_) {
+    RTC_LOG(LS_INFO) << "Closing socket";
+    if (socket) {
+      RTC_LOG(LS_INFO) << "Socket is not null, closing";
+      socket->Close();
+    }
+  }
+  tracked_sockets_.clear();
+  // Add a longer delay to ensure any pending socket operations are completed
+  usleep(500000); // Longer delay (500ms) to allow pending operations to complete
+
+  pss_.reset(); // Ensure PhysicalSocketServer is destroyed last after all threads and resources are released
+}
+
+void DirectApplication::Disconnect() {
+  if (rtc::Thread::Current() != main_thread_.get()) {
+    main_thread_->PostTask([this]() { Disconnect(); });
+    return;
+  }
+
+  // Close active connections and reset connection state without destroying core resources
+  RTC_LOG(LS_INFO) << "Disconnecting active connections";
+
+  // Close all tracked sockets to ensure they are removed from PhysicalSocketServer
+  RTC_LOG(LS_INFO) << "Closing tracked sockets during disconnect";
+  for (auto* socket : tracked_sockets_) {
+    if (socket) {
+      RTC_LOG(LS_INFO) << "Closing socket during disconnect";
+      socket->Close();
+    }
+  }
+  tracked_sockets_.clear();
+
+  // Reset connection-specific state
+  if (peer_connection_) {
+    peer_connection_->Close();
+    peer_connection_ = nullptr;
+  }
+  // peer_connection_factory_ = nullptr; // Keep factory alive for reconnection
+
+  // Reset message sequence counters for potential reconnection
+  ice_candidates_sent_ = 0;
+  ice_candidates_received_ = 0;
+  sdp_fragments_sent_ = 0;
+  sdp_fragments_received_ = 0;
+
+  // Small delay to allow pending operations to complete
+  usleep(100000); // Delay (100ms) to ensure operations complete
+
+  RTC_LOG(LS_INFO) << "Disconnected, ready for reconnection";
 }
 
 void DirectApplication::Run() {
@@ -112,8 +164,12 @@ void DirectApplication::Run() {
     rtc::Thread::Current()->ProcessMessages(100);
   }
 
-  // Final cleanup
-  CleanupSocketServer();
+  // Final cleanup only if quitting completely
+  if (should_quit_) {
+    Cleanup();
+  } else {
+    Disconnect(); // Otherwise just disconnect for potential reconnection
+  }
 }
 
 void DirectApplication::RunOnBackgroundThread() {
@@ -124,12 +180,16 @@ void DirectApplication::RunOnBackgroundThread() {
     while (!should_quit_) {
       main_thread_->ProcessMessages(100); // Process messages with 100ms timeout
     }
-    CleanupSocketServer();
+    if (should_quit_) {
+      Cleanup();
+    } else {
+      Disconnect(); // Otherwise just disconnect for potential reconnection
+    }
   });
 }
 
 DirectApplication::~DirectApplication() {
-  CleanupSocketServer();
+  Cleanup();
 }
 
 bool DirectApplication::Initialize() {
@@ -419,6 +479,22 @@ bool DirectApplication::SendMessage(const std::string& message) {
   }
   RTC_LOG(LS_INFO) << "Successfully sent " << sent << " bytes";
   return true;
+}
+
+rtc::Socket* DirectApplication::WrapSocket(SOCKET s) {
+  rtc::Socket* socket = pss_->WrapSocket(s);
+  if (socket) {
+    tracked_sockets_.push_back(socket);
+  }
+  return socket;
+}
+
+rtc::Socket* DirectApplication::CreateSocket(int family, int type) {
+  rtc::Socket* socket = pss_->CreateSocket(family, type);
+  if (socket) {
+    tracked_sockets_.push_back(socket);
+  }
+  return socket;
 }
 
 

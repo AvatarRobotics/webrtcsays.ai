@@ -891,6 +891,24 @@ if (!build_with_chromium) {
   }
 
   if (is_ios) {
+    action_foreach("create_bracket_include_headers_direct_framework") {
+      script = "//tools_webrtc/apple/copy_framework_header.py"
+      sources = [
+        "direct/direct.h",
+        "direct/option.h",
+      ]
+      outputs = [
+        "$target_gen_dir/direct.framework/Headers/{{source_file_part}}",
+      ]
+      args = [
+        "--input",
+        "{{source}}",
+        "--output",
+        rebase_path(target_gen_dir, root_build_dir) +
+            "/direct.framework/Headers/{{source_file_part}}",
+      ]
+    }
+
     ios_framework_bundle("direct_framework") {
       info_plist = "direct/Info.plist"
       output_name = "direct"  # Base name for the framework (direct.framework)
@@ -905,8 +923,9 @@ if (!build_with_chromium) {
       defines = [ "WEBRTC_LIBRARY_IMPL" ]
       include_dirs = []
       sources = [
+        # Keep .h files here for compilation but they are copied via action above
         "direct/direct.h",
-        "direct/option.h", # Assuming you renamed utils.h
+        "direct/option.h",
         "direct/direct.cc",
         "direct/caller.cc",
         "direct/callee.cc",
@@ -914,73 +933,62 @@ if (!build_with_chromium) {
         "direct/option.cc",
       ]
 
+      # Use the output of the action_foreach target for public headers
+      public_headers = get_target_outputs(":create_bracket_include_headers_direct_framework")
+
       cflags = [ "-g", "-O0" ]
       include_dirs += [ "../third_party/boringssl/src/include" ]
       if (rtc_use_speech_audio_devices) {
         defines += [ "WEBRTC_SPEECH_DEVICES" ]
-        # Note: espeak-ng might not be suitable for iOS, consider removing/replacing
         include_dirs += [ "../modules/third_party/espeak-ng/src/include" ]
       }
 
-      # Dependencies needed by the framework's code
       deps = [
-        # Keep dependencies relevant for iOS
-        # "//sdk:ios_framework_bundle", # Depend on the main WebRTC framework bundle target
-        "//sdk:framework_objc_signed_bundle", # Depend on the SIGNED framework bundle target
-        "//api:async_dns_resolver", # Use // prefix
-        "//api:audio_options_api", # Use // prefix
-        "//api:create_peerconnection_factory", # Use // prefix
-        "//api:libjingle_peerconnection_api", # Use // prefix
-        "//api:media_stream_interface", # Use // prefix
-        "//api:rtp_sender_interface", # Use // prefix
-        "//api:scoped_refptr", # Use // prefix
-        "//api/audio:audio_device", # Use // prefix
-        "//api/audio:audio_mixer_api", # Use // prefix
-        "//api/audio:audio_processing", # Use // prefix
-        "//api/audio_codecs:audio_codecs_api", # Use // prefix
-        "//api/audio_codecs:builtin_audio_decoder_factory", # Use // prefix
-        "//api/audio_codecs:builtin_audio_encoder_factory", # Use // prefix
-        # REMOVE base video codec factory templates as well
-        # "../api/video_codecs:video_decoder_factory_template",
-        # REMOVE specific software codec adapters for iOS
-        # "../api/video_codecs:video_decoder_factory_template_dav1d_adapter",
-        # "../api/video_codecs:video_decoder_factory_template_libvpx_vp8_adapter",
-        # "../api/video_codecs:video_decoder_factory_template_libvpx_vp9_adapter",
-        # "../api/video_codecs:video_decoder_factory_template_open_h264_adapter", # Keep if needed?
-        # "../api/video_codecs:video_encoder_factory_template",
-        # "../api/video_codecs:video_encoder_factory_template_libaom_av1_adapter",
-        # "../api/video_codecs:video_encoder_factory_template_libvpx_vp8_adapter",
-        # "../api/video_codecs:video_encoder_factory_template_libvpx_vp9_adapter",
-        # "../api/video_codecs:video_encoder_factory_template_open_h264_adapter", # Keep if needed?
-        "//api/task_queue:pending_task_safety_flag", # Use // prefix
-        "//api/units:time_delta", # Use // prefix
-        "//api/video:video_frame", # Use // prefix
-        "//api/video:video_rtp_headers", # Use // prefix
-        "//api/video_codecs:video_codecs_api", # Use // prefix and ensure uncommented
-        "//media:media_channel", # Use // prefix
-        "//media:video_common", # Use // prefix
-        "//p2p:connection", # Use // prefix
-        "//p2p:port_allocator", # Use // prefix
-        "//pc:video_track_source", # Use // prefix
-        "//rtc_base:async_dns_resolver", # Use // prefix
-        "//rtc_base:checks", # Use // prefix
-        "//rtc_base:logging", # Use // prefix
-        "//rtc_base:macromagic", # Use // prefix
-        "//rtc_base:net_helpers", # Use // prefix
-        "//rtc_base:socket_server", # Use // prefix
-        "//rtc_base:socket_address_pair", # Use // prefix
-        "//rtc_base:refcount", # Use // prefix
-        "//rtc_base:rtc_certificate_generator", # Use // prefix
-        "//rtc_base:ssl_adapter", # Use // prefix
-        "//rtc_base:stringutils", # Use // prefix
-        "//rtc_base:threading", # Use // prefix
-        "//rtc_base/third_party/sigslot", # Use // prefix
-        "//system_wrappers:field_trial", # Use // prefix
+        # Depend on the header processing action
+        ":create_bracket_include_headers_direct_framework",
+        # Keep other dependencies
+        "//sdk:framework_objc_signed_bundle",
+        "//api:async_dns_resolver",
+        "//api:audio_options_api",
+        "//api:create_peerconnection_factory",
+        "//api:libjingle_peerconnection_api",
+        "//api:media_stream_interface",
+        "//api:rtp_sender_interface",
+        "//api:scoped_refptr",
+        "//api/audio:audio_device",
+        "//api/audio:audio_mixer_api",
+        "//api/audio:audio_processing",
+        "//api/audio_codecs:audio_codecs_api",
+        "//api/audio_codecs:builtin_audio_decoder_factory",
+        "//api/audio_codecs:builtin_audio_encoder_factory",
+        "//api/task_queue:pending_task_safety_flag",
+        "//api/units:time_delta",
+        "//api/video:video_frame",
+        "//api/video:video_rtp_headers",
+        "//api/video_codecs:video_codecs_api",
+        "//media:media_channel",
+        "//media:video_common",
+        "//p2p:connection",
+        "//p2p:port_allocator",
+        "//pc:video_track_source",
+        "//rtc_base:async_dns_resolver",
+        "//rtc_base:checks",
+        "//rtc_base:logging",
+        "//rtc_base:macromagic",
+        "//rtc_base:net_helpers",
+        "//rtc_base:socket_server",
+        "//rtc_base:socket_address_pair",
+        "//rtc_base:refcount",
+        "//rtc_base:rtc_certificate_generator",
+        "//rtc_base:ssl_adapter",
+        "//rtc_base:stringutils",
+        "//rtc_base:threading",
+        "//rtc_base/third_party/sigslot",
+        "//system_wrappers:field_trial",
         "//third_party/abseil-cpp/absl/memory",
         "//third_party/jsoncpp:jsoncpp",
       ]
 
-      # Link necessary system frameworks for iOS
       frameworks = [
         "Foundation.framework",
         "AVFoundation.framework",
@@ -988,31 +996,26 @@ if (!build_with_chromium) {
         "CoreVideo.framework",
         "CoreGraphics.framework",
         "AudioToolbox.framework",
-        "VideoToolbox.framework", # Needed for hardware codecs
+        "VideoToolbox.framework",
       ]
 
-      # Link external pre-built frameworks if needed (e.g., whisper/llama)
       if (rtc_use_speech_audio_devices) {
-          # Add paths containing the XCFrameworks
-          # Ensure these paths are correct relative to the build output directory
-          framework_dirs = [
-            rebase_path("//src/modules/third_party/whillats/build-ios/lib/Release", root_build_dir),
-            rebase_path("//src/modules/third_party/whillats/third_party/whisper.cpp/build-apple/whisper.xcframework/ios-arm64", root_build_dir),
-            rebase_path("//src/modules/third_party/whillats/third_party/llama.cpp/build-apple/llama.xcframework/ios-arm64", root_build_dir),
-          ]
-          # Add the framework names (must end with .framework extension)
-          frameworks += [
-            "whillats.framework",
-            "whisper.framework",
-            "llama.framework",
-          ]
+        framework_dirs = [
+          rebase_path("//src/modules/third_party/whillats/build-ios/lib/Release", root_build_dir),
+          rebase_path("//src/modules/third_party/whillats/third_party/whisper.cpp/build-apple/whisper.xcframework/ios-arm64", root_build_dir),
+          rebase_path("//src/modules/third_party/whillats/third_party/llama.cpp/build-apple/llama.xcframework/ios-arm64", root_build_dir),
+        ]
+        frameworks += [
+          "whillats.framework",
+          "whisper.framework",
+          "llama.framework",
+        ]
       }
 
       if (!defined(ldflags)) { ldflags = [] }
-      # ldflags += [ "-Wl,-no_dead_strip" ] # Remove: Flag not recognized by lld
-
       configs += []
     }
+
   } else {
     # Keep the original shared_library definition for non-iOS platforms
     shared_library("direct_lib") {
@@ -1029,7 +1032,7 @@ if (!build_with_chromium) {
       include_dirs = []
       sources = [
         "direct/direct.h",
-        "direct/option.h", # Assuming you renamed utils.h
+        "direct/option.h",
         "direct/direct.cc",
         "direct/caller.cc",
         "direct/callee.cc",
@@ -1068,11 +1071,6 @@ if (!build_with_chromium) {
         # "../api/video_codecs:video_decoder_factory_template_libvpx_vp8_adapter",
         # "../api/video_codecs:video_decoder_factory_template_libvpx_vp9_adapter",
         # "../api/video_codecs:video_decoder_factory_template_open_h264_adapter", # Keep if needed?
-        # "../api/video_codecs:video_encoder_factory_template",
-        # "../api/video_codecs:video_encoder_factory_template_libaom_av1_adapter",
-        # "../api/video_codecs:video_encoder_factory_template_libvpx_vp8_adapter",
-        # "../api/video_codecs:video_encoder_factory_template_libvpx_vp9_adapter",
-        # "../api/video_codecs:video_encoder_factory_template_open_h264_adapter", # Keep if needed?
         "../api/task_queue:pending_task_safety_flag",
         "../api/units:time_delta",
         "../api/video:video_frame",
@@ -1144,7 +1142,8 @@ if (!build_with_chromium) {
 
     if (is_ios) {
       # Link against the framework on iOS
-      deps = [ ":direct_framework" ]
+      # Ensure dependency on both the framework and the correct header processing action
+      deps = [ ":direct_framework", ":create_bracket_include_headers_direct_framework" ]
       # Add the framework itself and the main WebRTC framework to link
       if (!defined(framework_dirs)) { framework_dirs = [] } # Ensure list exists
       framework_dirs += [ root_out_dir ]                    # Add path to built framework
