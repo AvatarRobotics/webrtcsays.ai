@@ -115,7 +115,6 @@ void DirectPeer::Start() {
 void DirectPeer::HandleMessage(rtc::AsyncPacketSocket* socket,
                              const std::string& message,
                              const rtc::SocketAddress& remote_addr) {
-   RTC_LOG(LS_INFO) << "[Peer::HandleMessage] Received message: '" << message << "'";
 
    if (message.find("INIT") == 0) {
         if (!is_caller()) {

@@ -78,7 +78,6 @@ bool DirectCaller::Connect() {
         }
 
         RTC_LOG(LS_INFO) << "Raw socket connected successfully";
-        waiting_for_welcome_ = true; // Set flag: expecting WELCOME for this new connection
 
         // Wrap the connected socket using DirectApplication::WrapSocket to track it
         auto* wrapped_socket = WrapSocket(raw_socket); // Use inherited WrapSocket
@@ -120,31 +119,20 @@ void DirectCaller::OnMessage(rtc::AsyncPacketSocket* socket,
     RTC_LOG(LS_INFO) << "Caller received: " << message;
 
     if (message == "WELCOME") {
-       if (waiting_for_welcome_) {
-            RTC_LOG(LS_INFO) << "Received WELCOME for the current connection attempt. Sending INIT.";
-            SendMessage("INIT");
-            waiting_for_welcome_ = false; // Reset the flag
-        } else {
-            RTC_LOG(LS_WARNING) << "Received potentially stale WELCOME. Ignoring.";
-        }
+       SendMessage("INIT");
     } 
-    else if (message == "WAITING") { 
-        waiting_for_welcome_ = false; // No longer waiting for welcome if callee is waiting
+    else if (message == "WAITING") { // Changed from if to else if for clarity
         Start();
     } 
     else if (message == "OK") {
-        waiting_for_welcome_ = false; // Reset flag on OK
         Shutdown();
         QuitThreads();
     } else {
-        // If we receive ICE/SDP etc. assume the welcome phase is over
-        waiting_for_welcome_ = false; 
         HandleMessage(socket, message, remote_addr);
     }
 }
 
 void DirectCaller::Disconnect() {
     RTC_LOG(LS_INFO) << "Caller signaling disconnect, sending CANCEL.";
-    waiting_for_welcome_ = false; // Reset flag on disconnect
     SendMessage("CANCEL"); // Send CANCEL to signal disconnect without shutdown
 }

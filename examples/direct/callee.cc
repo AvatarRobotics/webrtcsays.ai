@@ -74,7 +74,7 @@ bool DirectCallee::StartListening() {
             return false;
         }
 
-        // Wrap the listening socket (Restoring original logic)
+        // Wrap the listening socket
         auto wrapped_socket = pss()->WrapSocket(raw_socket);
         if (!wrapped_socket) {
             RTC_LOG(LS_ERROR) << "Failed to wrap socket";
@@ -119,8 +119,7 @@ void DirectCallee::OnNewConnection(rtc::AsyncListenSocket* listen_socket,
                  RTC_LOG(LS_WARNING) << "Received packet on unexpected socket instance. Ignoring.";
                  return;
             }
-            std::string received_data(reinterpret_cast<const char*>(packet.payload().data()), packet.payload().size());
-            RTC_LOG(LS_INFO) << "[Callback Lambda] Received data: '" << received_data << "' on socket " << current_client_socket;
+            RTC_LOG(LS_INFO) << "Received packet of size: " << packet.payload().size() << " on socket " << current_client_socket;
             // Pass the correct socket instance (current_client_socket) to OnMessage
             OnMessage(current_client_socket, 
                       reinterpret_cast<const unsigned char*>(packet.payload().data()), 
@@ -136,7 +135,7 @@ void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
                            size_t len,
                            const rtc::SocketAddress& remote_addr) {
     std::string message(reinterpret_cast<const char*>(data), len);
-    RTC_LOG(LS_INFO) << "[Callee::OnMessage] Start - Received: '" << message << "' from " << remote_addr.ToString();
+    RTC_LOG(LS_INFO) << "Callee received: " << message << " from " << remote_addr.ToString();
 
     if (message == "HELLO") {
         SendMessage("WELCOME");
@@ -145,35 +144,17 @@ void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
         Shutdown();
         QuitThreads();
     } else if (message == "CANCEL") {
-        RTC_LOG(LS_INFO) << "Received CANCEL from " << remote_addr.ToString() << ". Resetting state for this client.";
+        RTC_LOG(LS_INFO) << "Received CANCEL from " << remote_addr.ToString() << ". Disconnecting this client.";
         if (socket == tcp_socket_.get()) {
-            // 1. Close the specific client socket
             tcp_socket_->Close();
             tcp_socket_.reset();
-
-            // 2. Reset PeerConnection state (mimic part of base Disconnect)
-            if (peer_connection_) {
-                RTC_LOG(LS_INFO) << "Closing PeerConnection due to CANCEL";
-                peer_connection_->Close();
-                peer_connection_ = nullptr;
-            }
-            // 3. Reset message sequence counters (mimic part of base Disconnect)
-            ice_candidates_sent_ = 0;
-            ice_candidates_received_ = 0;
-            sdp_fragments_sent_ = 0;
-            sdp_fragments_received_ = 0;
-
-            // 4. DO NOT call base Disconnect() - keep listener alive
-            // 5. DO NOT call StartListening() - listener is still alive
-            
-            RTC_LOG(LS_INFO) << "Callee state reset. Ready for new connection.";
-
+            Disconnect();
         } else {
             RTC_LOG(LS_WARNING) << "Received CANCEL on an unexpected or outdated socket pointer";
         }
-        // // RTC_LOG(LS_INFO) << "Continuing to listen for new connections after CANCEL."; // Remove this log
+        // Ensure the listen_socket_ continues to accept new connections
+        RTC_LOG(LS_INFO) << "Continuing to listen for new connections after CANCEL.";
     } else {
-        RTC_LOG(LS_INFO) << "[Callee::OnMessage] Falling through to Peer::HandleMessage for message: '" << message << "'";
         HandleMessage(socket, message, remote_addr);
     }
 }

@@ -320,20 +320,23 @@ class DIRECT_API DirectCaller : public DirectPeer, public sigslot::has_slots<> {
   explicit DirectCaller(Options opts);
   ~DirectCaller() override;
 
+  // Connect and send messages
   bool Connect();
-  void Disconnect() override;
+  // bool SendMessage(const std::string& message);
+  virtual void DIRECT_API Disconnect() override;
 
- protected:
-  void OnConnect(rtc::AsyncPacketSocket* socket);
+ private:
+  // Called when data is received on the socket
   void OnMessage(rtc::AsyncPacketSocket* socket,
                  const unsigned char* data,
                  size_t len,
                  const rtc::SocketAddress& remote_addr);
 
- private:
-  bool is_caller() const { return true; }
+  // Called when connection is established
+  void OnConnect(rtc::AsyncPacketSocket* socket);
+
   rtc::SocketAddress remote_addr_;
-  bool waiting_for_welcome_ = false;
+  // std::unique_ptr<rtc::AsyncTCPSocket> tcp_socket_;
 };
 
 #endif  // WEBRTC_DIRECT_DIRECT_H_
