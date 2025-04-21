@@ -129,6 +129,7 @@ void DirectApplication::Disconnect() {
 
   // Reset connection-specific state
   if (peer_connection_) {
+    RTC_LOG(LS_INFO) << "Closing PeerConnection during disconnect";
     peer_connection_->Close();
     peer_connection_ = nullptr;
   }
