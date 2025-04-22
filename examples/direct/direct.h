@@ -232,6 +232,17 @@ class DIRECT_API DirectPeer : public DirectApplication {
 
   void Start();
 
+  void Mute() {
+    if (audio_track_) {
+      audio_track_->set_enabled(false);
+    }
+  }
+  void Unmute() {
+    if (audio_track_) {
+      audio_track_->set_enabled(true);
+    }
+  }
+
   // Override DirectApplication methods
   virtual void HandleMessage(rtc::AsyncPacketSocket* socket,
                              const std::string& message,
@@ -271,6 +282,7 @@ class DIRECT_API DirectPeer : public DirectApplication {
 
  private:
   Options opts_;  // Store command line options
+  rtc::scoped_refptr<webrtc::AudioTrackInterface> audio_track_;
   std::vector<std::string> pending_ice_candidates_;
 
   rtc::scoped_refptr<LambdaCreateSessionDescriptionObserver>
@@ -303,7 +315,7 @@ class DIRECT_API DirectCallee : public DirectPeer, public sigslot::has_slots<> {
       listen_socket_;  // Changed to unique_ptr
 };
 
-class RTC_EXPORT DIRECT_API DirectCaller : public DirectPeer, public sigslot::has_slots<> {
+class DIRECT_API DirectCaller : public DirectPeer, public sigslot::has_slots<> {
  public:
   explicit DirectCaller(Options opts);
   ~DirectCaller() override;

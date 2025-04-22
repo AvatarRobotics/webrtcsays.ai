@@ -538,6 +538,12 @@ int32_t WhisperAudioDevice::StopPlayout() {
   if (!_ptrThreadPlay.empty())
     _ptrThreadPlay.Finalize();
 
+  if (_tts) {
+    std::queue<std::string> empty;
+    std::swap(_textQueue, empty);
+    _tts->stop();
+  }  
+
   if(_llama_device) {
     _llama_device->stop();    
   }

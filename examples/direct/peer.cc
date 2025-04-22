@@ -61,12 +61,12 @@ void DirectPeer::Start() {
 
         auto audio_source = peer_connection_factory_->CreateAudioSource(audio_options);
         RTC_DCHECK(audio_source.get());
-        auto audio_track = peer_connection_factory_->CreateAudioTrack("audio_track", audio_source.get());
-        RTC_DCHECK(audio_track.get());
+        audio_track_ = peer_connection_factory_->CreateAudioTrack("audio_track", audio_source.get());
+        RTC_DCHECK(audio_track_.get());
 
         webrtc::RtpTransceiverInit init;
         init.direction = webrtc::RtpTransceiverDirection::kSendRecv;
-        auto at_result = peer_connection_->AddTransceiver(audio_track, init);
+        auto at_result = peer_connection_->AddTransceiver(audio_track_, init);
         RTC_DCHECK(at_result.ok());
         auto transceiver = at_result.value();
 
