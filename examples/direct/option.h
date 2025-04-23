@@ -55,6 +55,14 @@
     #define DIRECT_API DIRECT_IMPORT
 #endif
 
+enum LoggingSeverity {
+  LS_VERBOSE,
+  LS_INFO,
+  LS_WARNING,
+  LS_ERROR,
+  LS_NONE,
+};
+
 #endif // DIRECT_EXPORT_H 
 
 // Command line options
@@ -83,6 +91,8 @@ Options parseOptions(const std::vector<std::string>& args);
 
 // Function to get command line options to a string, to print or speak
 DIRECT_API std::string getUsage(const Options opts);
+
+DIRECT_API void DirectSetLoggingLevel(LoggingSeverity level);
 
 DIRECT_API rtc::scoped_refptr<rtc::RTCCertificate> DirectLoadCertificateFromEnv(Options opts);
 

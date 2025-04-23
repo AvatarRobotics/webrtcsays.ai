@@ -166,9 +166,12 @@ Options parseOptions(const std::vector<std::string>& args) {
     } else if (arg.find("--config=") == 0) {
       opts.config_path = arg.substr(9);
       break; // Found config, stop first pass
+    } else if (arg == "--help") {
+      opts.help = true;
+      return opts;
     }
   }
-
+  
   // --- Load from config file if specified ---
   // --- Re-enable JSON loading ---
   if (!opts.config_path.empty()) {
@@ -318,9 +321,7 @@ Options parseOptions(const std::vector<std::string>& args) {
         opts.vpn = arg.substr(6);
     }
     // Handle flags
-    else if (arg == "--help") {
-      opts.help = true;
-    } else if (arg == "--encryption") {
+    if (arg == "--encryption") {
       RTC_LOG(LS_INFO) << "Args set encryption on";
       opts.encryption = true;
     } else if (arg == "--no-encryption") {
@@ -442,6 +443,12 @@ std::string getUsage(const Options opts) {
    usage << "------------------------\\n"; // Footer
 
   return usage.str();
+}
+
+// LOGGING
+
+void DirectSetLoggingLevel(LoggingSeverity level) {
+  rtc::LogMessage::LogToDebug(static_cast<rtc::LoggingSeverity>(level));
 }
 
 // CERTIFICATES
