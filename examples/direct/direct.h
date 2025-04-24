@@ -17,14 +17,25 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
+#include <atomic>
+#include <functional>
 
+#include "absl/memory/memory.h"
 #include "api/audio_codecs/builtin_audio_decoder_factory.h"
 #include "api/audio_codecs/builtin_audio_encoder_factory.h"
 #include "api/create_peerconnection_factory.h"
 #include "api/environment/environment_factory.h"
 #include "api/jsep.h"
 #include "api/peer_connection_interface.h"
+#include "api/rtc_error.h"
+#include "api/rtp_receiver_interface.h"
+#include "api/media_stream_interface.h"
+#include "api/data_channel_interface.h"
+#include "api/audio/audio_mixer.h"
+#include "api/audio/audio_processing.h"
 #include "api/task_queue/default_task_queue_factory.h"
+#include "api/task_queue/task_queue_base.h"
 #include "api/video_codecs/video_decoder_factory_template.h"
 #include "api/video_codecs/video_decoder_factory_template_dav1d_adapter.h"
 #include "api/video_codecs/video_decoder_factory_template_libvpx_vp8_adapter.h"
@@ -35,20 +46,26 @@
 #include "api/video_codecs/video_encoder_factory_template_libvpx_vp8_adapter.h"
 #include "api/video_codecs/video_encoder_factory_template_libvpx_vp9_adapter.h"
 #include "api/video_codecs/video_encoder_factory_template_open_h264_adapter.h"
+#include "modules/audio_device/include/audio_device.h"
 #include "modules/audio_device/audio_device_impl.h"
 #include "p2p/base/basic_packet_socket_factory.h"
 #include "p2p/base/port_allocator.h"
 #include "p2p/client/basic_port_allocator.h"
 #include "pc/peer_connection.h"
 #include "pc/peer_connection_factory.h"
+#include "pc/session_description.h"
 #include "pc/test/mock_peer_connection_observers.h"
 #include "rtc_base/async_tcp_socket.h"
+#include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
-#include "rtc_base/openssl_identity.h"
+#include "rtc_base/net_helpers.h"
+#include "rtc_base/network.h"
 #include "rtc_base/physical_socket_server.h"
 #include "rtc_base/ref_counted_object.h"
+#include "rtc_base/rtc_certificate.h"
 #include "rtc_base/socket_address.h"
 #include "rtc_base/ssl_adapter.h"
+#include "rtc_base/ssl_certificate.h"
 #include "rtc_base/ssl_identity.h"
 #include "rtc_base/thread.h"
 #include "rtc_base/virtual_socket_server.h"
@@ -111,6 +128,23 @@ class LambdaSetRemoteDescriptionObserver
   std::function<void(webrtc::RTCError)> on_complete_;
 };
 
+// Simple video sink that logs frame information to the console
+class ConsoleVideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+ public:
+  void OnFrame(const webrtc::VideoFrame& frame) override {
+    if(!received_frame_) {
+      RTC_LOG(LS_INFO) << "Received video frame: " << frame.width() << "x"
+                       << frame.height() << " timestamp=" << frame.timestamp_us();
+      // For simplicity, we just log. Actual rendering is complex in console.
+      received_frame_ = true;
+    }
+  }
+
+ private:
+  bool received_frame_ = false;
+  // Add any necessary members, e.g., for frame rate calculation
+};
+
 class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
  public:
   DirectApplication();
@@ -130,15 +164,21 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
   // Disconnect active connections without destroying core resources
   virtual void DIRECT_API Disconnect();
 
-  static void DIRECT_API rtcInitializeSSL();
-  static void DIRECT_API rtcCleanupSSL();
+  static void DIRECT_API rtcInitialize();
+  static void DIRECT_API rtcCleanup();
 
   // Override WrapSocket to track created sockets
-  rtc::Socket* WrapSocket(SOCKET s);
+  rtc::Socket* WrapSocket(int s);
   rtc::Socket* CreateSocket(int family, int type);
 
+  rtc::PhysicalSocketServer *pss() { return pss_; }
+  rtc::BasicNetworkManager *network_manager() { return network_manager_; }
  protected:
-  rtc::PhysicalSocketServer* pss() { return pss_.get(); }
+  // Virtual method for derived classes to implement specific shutdown logic
+  virtual void ShutdownInternal() {}
+
+  rtc::PhysicalSocketServer *pss_ = new rtc::PhysicalSocketServer();
+  rtc::BasicNetworkManager *network_manager_ = new rtc::BasicNetworkManager(pss());
     
   // Thread getters for derived classes
   rtc::Thread* signaling_thread() { return signaling_thread_.get(); }
@@ -152,7 +192,6 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> peer_connection_;
   rtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface>
       peer_connection_factory_;
-  std::unique_ptr<rtc::BasicNetworkManager> network_manager_;
   std::unique_ptr<rtc::BasicPacketSocketFactory> socket_factory_;
 
   rtc::scoped_refptr<rtc::RTCCertificate> certificate_;  // Store certificate
@@ -203,8 +242,25 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
   std::atomic<bool> should_quit_{false};
 
   static constexpr int kDebugNoEncryptionMode = true;
+
+  void OnSignalingChange(
+      webrtc::PeerConnectionInterface::SignalingState new_state) {}
+  void OnAddTrack(
+    rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver,
+      const std::vector<rtc::scoped_refptr<webrtc::MediaStreamInterface>>& streams) {}
+  void OnRemoveTrack(
+      rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver) {}
+  void OnDataChannel(
+      rtc::scoped_refptr<webrtc::DataChannelInterface> channel) {}
+  void OnRenegotiationNeeded() {}
+  void OnIceConnectionChange(
+      webrtc::PeerConnectionInterface::IceConnectionState new_state) {}
+  void OnIceGatheringChange(
+      webrtc::PeerConnectionInterface::IceGatheringState new_state) {}
+  void OnIceCandidate(const webrtc::IceCandidateInterface* candidate) {}
+  void OnIceConnectionReceivingChange(bool receiving) {}
+
  private:
-  // std::unique_ptr<rtc::VirtualSocketServer> vss_;
   std::unique_ptr<rtc::Thread> main_thread_;
 
   // WebRTC threads
@@ -216,7 +272,6 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
 
   // Ensure methods are called on correct thread
   webrtc::SequenceChecker sequence_checker_;
-  std::unique_ptr<rtc::PhysicalSocketServer> pss_;
 
   // VPN addresses
   std::vector<std::string> vpns_;
@@ -250,27 +305,23 @@ class DIRECT_API DirectPeer : public DirectApplication {
 
   virtual bool SendMessage(const std::string& message) override;
 
-  // PeerConnectionObserver implementation
-  void OnSignalingChange(
-      webrtc::PeerConnectionInterface::SignalingState new_state) override;
+  // PeerConnectionObserver implementation (inherited via DirectApplication)
+  // Add overrides here if DirectApplication declares them virtual
   void OnAddTrack(
       rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver,
-      const std::vector<rtc::scoped_refptr<webrtc::MediaStreamInterface>>&
-          streams) override;
+      const std::vector<rtc::scoped_refptr<webrtc::MediaStreamInterface>>& streams) override;
   void OnRemoveTrack(
       rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver) override;
-  void OnDataChannel(
-      rtc::scoped_refptr<webrtc::DataChannelInterface> channel) override;
-  void OnRenegotiationNeeded() override;
-  void OnIceConnectionChange(
-      webrtc::PeerConnectionInterface::IceConnectionState new_state) override;
-  void OnIceGatheringChange(
-      webrtc::PeerConnectionInterface::IceGatheringState new_state) override;
   void OnIceCandidate(const webrtc::IceCandidateInterface* candidate) override;
-  void OnIceConnectionReceivingChange(bool receiving) override;
 
  protected:
-  void Shutdown();
+  // Override the virtual shutdown method from DirectApplication
+  void ShutdownInternal() override;
+
+  // Keep the old Shutdown method signature if needed for direct calls, 
+  // but it should likely just call ShutdownInternal now.
+  // void Shutdown(); 
+
   bool is_caller() const { return opts_.mode == "caller"; }
   webrtc::PeerConnectionInterface* peer_connection() const {
     return peer_connection_.get();
@@ -283,6 +334,8 @@ class DIRECT_API DirectPeer : public DirectApplication {
  private:
   Options opts_;  // Store command line options
   rtc::scoped_refptr<webrtc::AudioTrackInterface> audio_track_;
+  rtc::scoped_refptr<webrtc::VideoTrackInterface> video_track_;
+  std::unique_ptr<ConsoleVideoRenderer> video_sink_;
   std::vector<std::string> pending_ice_candidates_;
 
   rtc::scoped_refptr<LambdaCreateSessionDescriptionObserver>

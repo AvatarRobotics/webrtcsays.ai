@@ -43,7 +43,7 @@ bool DirectCaller::Connect() {
         // Create raw socket
         int raw_socket = ::socket(AF_INET, SOCK_STREAM, 0);
         if (raw_socket < 0) {
-            RTC_LOG(LS_ERROR) << "Failed to create raw socket, errno: " << errno;
+            RTC_LOG(LS_ERROR) << "Failed to create raw socket, errno: " << strerror(errno);
             return false;
         }
 
@@ -56,7 +56,7 @@ bool DirectCaller::Connect() {
 
         // Bind
         if (::bind(raw_socket, reinterpret_cast<struct sockaddr*>(&local_addr), sizeof(local_addr)) < 0) {
-            RTC_LOG(LS_ERROR) << "Failed to bind raw socket, errno: " << errno;
+            RTC_LOG(LS_ERROR) << "Failed to bind raw socket, errno: " << strerror(errno);
             ::close(raw_socket);
             return false;
         }
@@ -72,7 +72,7 @@ bool DirectCaller::Connect() {
 
         // Connect
         if (::connect(raw_socket, reinterpret_cast<struct sockaddr*>(&remote_addr), sizeof(remote_addr)) < 0) {
-            RTC_LOG(LS_ERROR) << "Failed to connect raw socket, errno: " << errno;
+            RTC_LOG(LS_ERROR) << "Failed to connect raw socket, errno: " << strerror(errno);
             ::close(raw_socket);
             return false;
         }
@@ -82,7 +82,7 @@ bool DirectCaller::Connect() {
         // Wrap the connected socket using DirectApplication::WrapSocket to track it
         auto* wrapped_socket = WrapSocket(raw_socket); // Use inherited WrapSocket
         if (!wrapped_socket) {
-            RTC_LOG(LS_ERROR) << "Failed to wrap socket, errno: " << errno;
+            RTC_LOG(LS_ERROR) << "Failed to wrap socket, errno: " << strerror(errno);
             ::close(raw_socket);
             return false;
         }
@@ -125,7 +125,7 @@ void DirectCaller::OnMessage(rtc::AsyncPacketSocket* socket,
         Start();
     } 
     else if (message == "OK") {
-        Shutdown();
+        ShutdownInternal();
         QuitThreads();
     } else {
         HandleMessage(socket, message, remote_addr);

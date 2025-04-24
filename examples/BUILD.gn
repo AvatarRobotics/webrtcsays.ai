@@ -1068,7 +1068,7 @@ if (!build_with_chromium) {
         # "../api/video_codecs:video_decoder_factory_template",
         # REMOVE specific software codec adapters for iOS
         # "../api/video_codecs:video_decoder_factory_template_dav1d_adapter",
-        # "../api/video_codecs:video_decoder_factory_template_libvpx_vp8_adapter",
+        "../api/video_codecs:video_decoder_factory_template_libvpx_vp8_adapter",
         # "../api/video_codecs:video_decoder_factory_template_libvpx_vp9_adapter",
         # "../api/video_codecs:video_decoder_factory_template_open_h264_adapter", # Keep if needed?
         "../api/task_queue:pending_task_safety_flag",
@@ -1078,6 +1078,7 @@ if (!build_with_chromium) {
         "../api/video_codecs:video_codecs_api",
         "../media:media_channel",
         "../media:video_common",
+        "../media:rtc_media_tests_utils",
         "../p2p:connection",
         "../p2p:port_allocator",
         "../pc:video_track_source",
@@ -1094,6 +1095,7 @@ if (!build_with_chromium) {
         "../rtc_base:stringutils",
         "../rtc_base:threading",
         "../rtc_base/third_party/sigslot",
+        "../rtc_base:task_queue_for_test",
         "../system_wrappers:field_trial",
         "../test:field_trial",
         "../test:rtp_test_utils",

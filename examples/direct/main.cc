@@ -10,16 +10,24 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include "direct.h"
 #include <string>
 #include <vector>
+#include <unistd.h>
+
+#include "direct.h"
+#include "option.h"
 
 int main(int argc, char* argv[]) {
   
-  std::vector<std::string> args(argv + 1, argv + argc);
-  std::string s; for (const auto &piece : args) s += (piece + " ");
-  
-  Options opts = parseOptions(s.c_str());
+  Options opts;
+  std::string options;
+  if(argc == 1) {
+    opts.help = true;
+  } else {
+    std::vector<std::string> args(argv + 1, argv + argc);
+    for (const auto &piece : args) options += (piece + " ");
+    opts = parseOptions(options.c_str());
+  } 
 
   if (opts.help) {
     auto usage = opts.help_string;
@@ -28,44 +36,51 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  DirectApplication::rtcInitializeSSL();
+  DirectSetLoggingLevel(LoggingSeverity::LS_INFO); 
+  DirectApplication::rtcInitialize();
 
   opts.mode = "callee";
-  DirectCallee callee(opts);
-  if (!callee.Initialize()) {
+  std::unique_ptr<DirectCallee> callee = std::make_unique<DirectCallee>(opts);
+  if (!callee->Initialize()) {
     fprintf(stderr, "Failed to initialize callee\n");
     return 1;
   }
-  if (!callee.StartListening()) {
+  if (!callee->StartListening()) {
     fprintf(stderr, "Failed to start listening\n");
     return 1;
   }
-  callee.RunOnBackgroundThread(); 
+  callee->RunOnBackgroundThread(); 
 
   opts.mode = "caller";
-  DirectCaller caller(opts);
-  if (!caller.Initialize()) {
+  std::unique_ptr<DirectCaller> caller = std::make_unique<DirectCaller>(opts);
+  if (!caller->Initialize()) {
     fprintf(stderr, "failed to initialize caller\n");
     return 1;
   }
-  if (!caller.Connect()) {
+  if (!caller->Connect()) {
     // RTC_LOG(LS_ERROR) << "failed to connect"; // Removed logging
     fprintf(stderr, "failed to connect\n");
     return 1;
   }
-  caller.RunOnBackgroundThread();
+  caller->RunOnBackgroundThread();
+
+  usleep(10000000);
 
   // Wait for user input or some condition to quit
-  fprintf(stderr, "Press Enter to quit...\n");
-  getchar();
+  caller->Disconnect();
+  usleep(500000);
+  caller.Connect();
 
   // Signal both instances to quit before destruction
-  callee.SignalQuit();
-  caller.SignalQuit();
+  callee->SignalQuit();
+  caller->SignalQuit();
+
+  callee.reset();
+  caller.reset();
 
   // Allow some time for threads to process quit
   usleep(50000);
 
-  DirectApplication::rtcCleanupSSL();
+  DirectApplication::rtcCleanup();
   return 0;
 }

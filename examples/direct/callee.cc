@@ -40,7 +40,6 @@ DirectCallee::~DirectCallee() {
     if (listen_socket_) {
         listen_socket_.reset();
     }
-    Cleanup();
 }
 
 bool DirectCallee::StartListening() {
@@ -49,7 +48,7 @@ bool DirectCallee::StartListening() {
         // Create raw socket
         int raw_socket = ::socket(AF_INET, SOCK_STREAM, 0);
         if (raw_socket < 0) {
-            RTC_LOG(LS_ERROR) << "Failed to create socket, errno: " << errno;
+            RTC_LOG(LS_ERROR) << "Failed to create socket, errno: " << strerror(errno);
             return false;
         }
 
@@ -62,14 +61,14 @@ bool DirectCallee::StartListening() {
 
         // Bind
         if (::bind(raw_socket, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-            RTC_LOG(LS_ERROR) << "Failed to bind, errno: " << errno;
+            RTC_LOG(LS_ERROR) << "Failed to bind, errno: " << strerror(errno);
             ::close(raw_socket);
             return false;
         }
 
         // Listen
         if (::listen(raw_socket, 5) < 0) {
-            RTC_LOG(LS_ERROR) << "Failed to listen, errno: " << errno;
+            RTC_LOG(LS_ERROR) << "Failed to listen, errno: " << strerror(errno);
             ::close(raw_socket);
             return false;
         }
@@ -141,7 +140,7 @@ void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
         SendMessage("WELCOME");
     } else if (message == "BYE") {
         SendMessage("OK");
-        Shutdown();
+        ShutdownInternal();
         QuitThreads();
     } else if (message == "CANCEL") {
         RTC_LOG(LS_INFO) << "Received CANCEL from " << remote_addr.ToString() << ". Disconnecting this client.";

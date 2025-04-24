@@ -13,6 +13,11 @@
 #include "rtc_base/network.h"
 #include "rtc_base/ip_address.h"
 #include <unistd.h> // For usleep
+#include <vector>
+#include <string>
+#include "rtc_base/time_utils.h"
+#include "api/video_codecs/video_encoder_factory_template_libvpx_vp8_adapter.h"
+#include "api/video_codecs/video_decoder_factory_template_libvpx_vp8_adapter.h"
 
 #include "direct.h"
 #include "option.h"
@@ -20,11 +25,11 @@
 // String split from option.cc
 std::vector<std::string> stringSplit(std::string input, std::string delimiter);
 
-void DirectApplication::rtcInitializeSSL() {
+void DirectApplication::rtcInitialize() {
   rtc::InitializeSSL();
 }
 
-void DirectApplication::rtcCleanupSSL() {
+void DirectApplication::rtcCleanup() {
   rtc::CleanupSSL();
 }
 
@@ -36,24 +41,54 @@ rtc::IPAddress IPFromString(absl::string_view str) {
 
 // DirectApplication Implementation
 DirectApplication::DirectApplication() {
-  pss_ = std::make_unique<rtc::PhysicalSocketServer>();
 
   main_thread_ = rtc::Thread::CreateWithSocketServer();
   main_thread_->socketserver()->SetMessageQueue(main_thread_.get());
   DirectThreadSetName(main_thread(), "Main");
 
-  //main_thread_->WrapCurrent();
-
   ws_thread_ = rtc::Thread::Create();
   worker_thread_ = rtc::Thread::Create();
   signaling_thread_ = rtc::Thread::Create();
-  network_thread_ = std::make_unique<rtc::Thread>(pss_.get());
+  network_thread_ = std::make_unique<rtc::Thread>(DirectApplication::pss());
   network_thread_->socketserver()->SetMessageQueue(network_thread_.get());
 
   peer_connection_factory_ = nullptr;
 }
 
 void DirectApplication::Cleanup() {
+  // Explicitly close and release PeerConnection via Shutdown before stopping threads
+  ShutdownInternal();
+
+  // Reset factory on signaling thread before stopping threads
+  if (signaling_thread()->IsCurrent()) { // Avoid blocking call if already on signaling thread
+       if (peer_connection_factory_) {
+           peer_connection_factory_ = nullptr;
+       }
+  } else {
+      signaling_thread()->BlockingCall([this]() {
+          if (peer_connection_factory_) {
+              peer_connection_factory_ = nullptr;
+          }
+      });
+  }
+
+  // Explicitly release the ADM reference on the worker thread before stopping threads
+  if (worker_thread()->IsCurrent()) { // Avoid blocking call if already on worker thread
+      dependencies_.adm = nullptr; 
+      audio_device_module_ = nullptr; // Also release the direct member ref
+  } else {
+     worker_thread()->BlockingCall([this]() {
+         dependencies_.adm = nullptr;
+         audio_device_module_ = nullptr; // Also release the direct member ref
+     });
+  }
+
+  // Remove the task that resets PC on the network thread
+  // network_thread_->PostTask([this]() {
+  //   peer_connection_ = nullptr; 
+  //   peer_connection_factory_ = nullptr;
+  // });
+
   if (rtc::Thread::Current() != main_thread_.get()) {
     main_thread_->PostTask([this]() { Cleanup(); });
     return;
@@ -63,25 +98,25 @@ void DirectApplication::Cleanup() {
   if (network_thread_) {
     network_thread_->Quit();
     network_thread_->Stop();
-    usleep(50000); // Small delay (50ms) to allow pending operations to complete
+    rtc::Thread::SleepMs(50); // Small delay (50ms) to allow pending operations to complete
     network_thread_.reset();
   }
   if (worker_thread_) {
     worker_thread_->Quit();
     worker_thread_->Stop();
-    usleep(50000);
+    rtc::Thread::SleepMs(50);
     worker_thread_.reset();
   }
   if (signaling_thread_) {
     signaling_thread_->Quit();
     signaling_thread_->Stop();
-    usleep(50000);
+    rtc::Thread::SleepMs(50);
     signaling_thread_.reset();
   }
   if (ws_thread_) {
     ws_thread_->Quit();
     ws_thread_->Stop();
-    usleep(50000);
+    rtc::Thread::SleepMs(50);
     ws_thread_.reset();
   }
   if (main_thread_) {
@@ -89,7 +124,6 @@ void DirectApplication::Cleanup() {
   }
 
   // Clear remaining members
-  network_manager_.reset();
   socket_factory_.reset();
   
   // Close all tracked sockets to ensure they are removed from PhysicalSocketServer
@@ -103,9 +137,16 @@ void DirectApplication::Cleanup() {
   }
   tracked_sockets_.clear();
   // Add a longer delay to ensure any pending socket operations are completed
-  usleep(500000); // Longer delay (500ms) to allow pending operations to complete
+  rtc::Thread::SleepMs(500); // Longer delay (500ms) to allow pending operations to complete
 
-  pss_.reset(); // Ensure PhysicalSocketServer is destroyed last after all threads and resources are released
+  if(pss_) {
+    pss_->WakeUp();
+    delete pss_;
+  }
+  if(network_manager_) {
+    delete network_manager_;
+  }
+
 }
 
 void DirectApplication::Disconnect() {
@@ -141,7 +182,7 @@ void DirectApplication::Disconnect() {
   sdp_fragments_received_ = 0;
 
   // Small delay to allow pending operations to complete
-  usleep(100000); // Delay (100ms) to ensure operations complete
+  rtc::Thread::SleepMs(100); // Delay (100ms) to ensure operations complete
 
   RTC_LOG(LS_INFO) << "Disconnected, ready for reconnection";
 }
@@ -189,6 +230,8 @@ void DirectApplication::RunOnBackgroundThread() {
 }
 
 DirectApplication::~DirectApplication() {
+  if (!should_quit_)
+    should_quit_ = true;
   Cleanup();
 }
 
@@ -286,8 +329,10 @@ bool DirectApplication::CreatePeerConnection(Options opts_) {
       webrtc::CreateBuiltinAudioEncoderFactory(),
       webrtc::CreateBuiltinAudioDecoderFactory(),
       // Pass nullptr for video factories to use internal defaults
-      nullptr, // video_encoder_factory
-      nullptr, // video_decoder_factory
+      opts_.video ? \
+      std::make_unique<webrtc::VideoEncoderFactoryTemplate<webrtc::LibvpxVp8EncoderTemplateAdapter>>() : nullptr,
+      opts_.video ? \
+      std::make_unique<webrtc::VideoDecoderFactoryTemplate<webrtc::LibvpxVp8DecoderTemplateAdapter>>(): nullptr, // video_encoder_factory
       nullptr, // audio_mixer
       nullptr  // audio_processing
   );
@@ -318,8 +363,6 @@ bool DirectApplication::CreatePeerConnection(Options opts_) {
   
   // Simple, reliable intervals
   config.ice_connection_receiving_timeout = 30000;  // 30 seconds instead of default 15
-  config.ice_check_min_interval = 200;             // More frequent checks
-  config.ice_check_interval_strong_connectivity = 1000;  // Check every second when connected
   config.ice_backup_candidate_pair_ping_interval = 2500; // Keep backup pairs alive
 
   cricket::ServerAddresses stun_servers;
@@ -346,7 +389,7 @@ bool DirectApplication::CreatePeerConnection(Options opts_) {
           size_t colon_pos = host_port.find(':');
           if (colon_pos != std::string::npos) {
               std::string host = host_port.substr(0, colon_pos);
-              int port = std::stoi(host_port.substr(colon_pos + 1));
+              int port = atoi(host_port.substr(colon_pos + 1).c_str());
               stun_servers.insert(rtc::SocketAddress(host, port));
           }
       } else if (server.uri.find("turn:") == 0) {
@@ -358,7 +401,7 @@ bool DirectApplication::CreatePeerConnection(Options opts_) {
               turn_config.ports.push_back(cricket::ProtocolAddress(
                   rtc::SocketAddress(
                       host_port.substr(0, colon_pos),
-                      std::stoi(host_port.substr(colon_pos + 1))),
+                      atoi(host_port.substr(colon_pos + 1).c_str())),
                   cricket::PROTO_UDP));
               turn_servers.push_back(turn_config);
           }
@@ -383,7 +426,7 @@ bool DirectApplication::CreatePeerConnection(Options opts_) {
   // Recreate network manager if needed, passing the PhysicalSocketServer (which is a SocketFactory)
   if (!network_manager_) {
     // Pass pss() which returns the PhysicalSocketServer*, a valid SocketFactory*
-    network_manager_ = std::make_unique<rtc::BasicNetworkManager>(pss());
+    network_manager_ = new rtc::BasicNetworkManager(pss());
   }
 
   // Add VPN list to ignore
@@ -398,7 +441,7 @@ bool DirectApplication::CreatePeerConnection(Options opts_) {
   }
 
   auto port_allocator = std::make_unique<cricket::BasicPortAllocator>(
-      network_manager_.get(), socket_factory_.get());
+      network_manager_, socket_factory_.get());
   RTC_DCHECK(port_allocator.get());    
 
   port_allocator->SetConfiguration(
@@ -407,7 +450,7 @@ bool DirectApplication::CreatePeerConnection(Options opts_) {
       0,  // Keep this as 0
       webrtc::PeerConnectionInterface::ContinualGatheringPolicy::GATHER_CONTINUALLY,
       nullptr,
-      std::nullopt
+      {}
   );
 
   // Allow flexible port allocation for UDP
@@ -474,15 +517,15 @@ bool DirectApplication::SendMessage(const std::string& message) {
   size_t sent = tcp_socket_->Send(message.c_str(), message.length(),
                                   rtc::PacketOptions());
   if (sent <= 0) {
-    RTC_LOG(LS_ERROR) << "Failed to send message, error: " << errno;
+    RTC_LOG(LS_ERROR) << "Failed to send message, error: " << tcp_socket_->GetError();
     return false;
   }
   RTC_LOG(LS_INFO) << "Successfully sent " << sent << " bytes";
   return true;
 }
 
-rtc::Socket* DirectApplication::WrapSocket(SOCKET s) {
-  rtc::Socket* socket = pss_->WrapSocket(s);
+rtc::Socket* DirectApplication::WrapSocket(int s) {
+  rtc::Socket* socket = DirectApplication::pss()->WrapSocket(s);
   if (socket) {
     tracked_sockets_.push_back(socket);
   }
@@ -490,11 +533,9 @@ rtc::Socket* DirectApplication::WrapSocket(SOCKET s) {
 }
 
 rtc::Socket* DirectApplication::CreateSocket(int family, int type) {
-  rtc::Socket* socket = pss_->CreateSocket(family, type);
+  rtc::Socket* socket = DirectApplication::pss()->CreateSocket(family, type);
   if (socket) {
     tracked_sockets_.push_back(socket);
   }
   return socket;
 }
-
-

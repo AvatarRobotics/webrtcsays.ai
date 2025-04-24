@@ -11,6 +11,7 @@
  */
 
 #include <string>
+#include <vector>
 
 #include "api/peer_connection_interface.h"
 #include "api/rtc_event_log/rtc_event_log.h"
@@ -22,6 +23,11 @@
 #include "modules/video_capture/video_capture_factory.h"
 #include "pc/video_track_source.h"
 #include "rtc_base/ref_counted_object.h"
+#include "pc/test/fake_periodic_video_source.h"
+#include "pc/test/fake_periodic_video_track_source.h"
+#include "api/video/video_frame.h"
+#include "api/video/video_sink_interface.h"
+#include "rtc_base/logging.h"
 
 #include "direct.h"
 
@@ -33,16 +39,40 @@ DirectPeer::DirectPeer(
 }
 
 DirectPeer::~DirectPeer() {
+  // Shutdown should have been called, but as a safety net:
+  if (peer_connection_) {
+      ShutdownInternal(); // Ensure cleanup happens
+  }
+  // Ensure sink is removed if it exists
+  if (video_track_ && video_sink_) {
+      video_track_->RemoveSink(video_sink_.get());
+  }
 }
 
-void DirectPeer::Shutdown() {
-    RTC_LOG(LS_INFO) << "Shutting down peer connection";
-    if (peer_connection_) {
-        peer_connection_->Close();
-        peer_connection_ = nullptr;
-    }
+void DirectPeer::ShutdownInternal() {
+    RTC_LOG(LS_INFO) << "Shutting down peer connection (DirectPeer::ShutdownInternal)";
+
+    // Perform close and release on the signaling thread
+    signaling_thread()->BlockingCall([this]() {
+        RTC_DCHECK_RUN_ON(signaling_thread());
+        // Remove sink before closing the connection
+        if (video_track_ && video_sink_) {
+            RTC_LOG(LS_INFO) << "Removing video sink.";
+            // Assuming video_track_ is accessed/modified only on signaling thread after creation
+            video_track_->RemoveSink(video_sink_.get());
+            video_sink_.reset();
+        }
+        if (peer_connection_) {
+            peer_connection_->Close();
+            peer_connection_ = nullptr; // Release ref ptr on signaling thread
+        }
+        // Optionally reset tracks here if managed by DirectPeer
+        audio_track_ = nullptr;
+        video_track_ = nullptr;
+    });
+
     // Do not reset peer_connection_factory_ to allow reconnection
-    RTC_LOG(LS_INFO) << "Peer connection closed, but factory preserved for potential reconnection";
+    RTC_LOG(LS_INFO) << "Peer connection closed and released on signaling thread.";
 }
 
 void DirectPeer::Start() {
@@ -64,17 +94,40 @@ void DirectPeer::Start() {
         audio_track_ = peer_connection_factory_->CreateAudioTrack("audio_track", audio_source.get());
         RTC_DCHECK(audio_track_.get());
 
-        webrtc::RtpTransceiverInit init;
-        init.direction = webrtc::RtpTransceiverDirection::kSendRecv;
-        auto at_result = peer_connection_->AddTransceiver(audio_track_, init);
+        webrtc::RtpTransceiverInit ainit;
+        ainit.direction = webrtc::RtpTransceiverDirection::kSendRecv;
+        auto at_result = peer_connection_->AddTransceiver(audio_track_, ainit);
         RTC_DCHECK(at_result.ok());
-        auto transceiver = at_result.value();
+        auto atransceiver = at_result.value();
 
         // Force the direction immediately after creation
-        auto direction_result = transceiver->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendRecv);
+        auto adirection_result = atransceiver->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendRecv);
         RTC_LOG(LS_INFO) << "Initial transceiver direction set: " << 
-            (direction_result.ok() ? "success" : "failed");
+            (adirection_result.ok() ? "success" : "failed");
     
+        webrtc::FakePeriodicVideoSource::Config config;
+        config.frame_interval_ms = 100;
+        config.timestamp_offset_ms = rtc::TimeMillis();
+        config.width = 1280;
+        config.height = 720;
+
+        auto video_source = rtc::make_ref_counted<webrtc::FakePeriodicVideoTrackSource>(
+        config, /* remote */ false);
+        RTC_DCHECK(video_source.get());
+        video_track_ = peer_connection_factory_->CreateVideoTrack(video_source, "video_track");
+        RTC_DCHECK(video_track_.get());
+
+        webrtc::RtpTransceiverInit vinit;
+        vinit.direction = webrtc::RtpTransceiverDirection::kSendRecv;
+        auto vt_result = peer_connection_->AddTransceiver(video_track_, vinit);
+        RTC_DCHECK(vt_result.ok());
+        auto vtransceiver = vt_result.value();
+
+        // Force the direction immediately after creation
+        auto vdirection_result = vtransceiver->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendRecv);
+        RTC_LOG(LS_INFO) << "Initial transceiver direction set: " << 
+            (vdirection_result.ok() ? "success" : "failed");
+
         webrtc::PeerConnectionInterface::RTCOfferAnswerOptions offer_options;
 
         // Store observer in a member variable to keep it alive
@@ -163,46 +216,6 @@ bool DirectPeer::SendMessage(const std::string& message) {
     return DirectApplication::SendMessage(message);
 }
 
-// PeerConnectionObserver implementation
-void DirectPeer::OnSignalingChange(webrtc::PeerConnectionInterface::SignalingState new_state) {
-    // Implementation will go here
-}
-
-void DirectPeer::OnAddTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver,
-                           const std::vector<rtc::scoped_refptr<webrtc::MediaStreamInterface>>& streams) {
-    // Implementation will go here
-}
-
-void DirectPeer::OnRemoveTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver) {
-    // Implementation will go here
-}
-
-void DirectPeer::OnDataChannel(rtc::scoped_refptr<webrtc::DataChannelInterface> channel) {
-    // Implementation will go here
-}
-
-void DirectPeer::OnRenegotiationNeeded() {
-    // Implementation will go here
-}
-
-void DirectPeer::OnIceConnectionChange(webrtc::PeerConnectionInterface::IceConnectionState new_state) {
-    // Implementation will go here
-}
-
-void DirectPeer::OnIceGatheringChange(webrtc::PeerConnectionInterface::IceGatheringState new_state) {
-  switch (new_state) {
-    case webrtc::PeerConnectionInterface::kIceGatheringNew:
-      RTC_LOG(LS_INFO) << "ICE gathering state: New - Starting to gather candidates";
-      break;
-    case webrtc::PeerConnectionInterface::kIceGatheringGathering:
-      RTC_LOG(LS_INFO) << "ICE gathering state: Gathering - Collecting candidates";
-      break;
-    case webrtc::PeerConnectionInterface::kIceGatheringComplete:
-      RTC_LOG(LS_INFO) << "ICE gathering state: Complete - All candidates collected";
-      break;
-  }
-}
-
 void DirectPeer::OnIceCandidate(const webrtc::IceCandidateInterface* candidate) {
     std::string sdp;
     if (!candidate->ToString(&sdp)) {
@@ -222,10 +235,6 @@ void DirectPeer::OnIceCandidate(const webrtc::IceCandidateInterface* candidate) 
     }
     
     SendMessage("ICE:" + sdp);
-}
-
-void DirectPeer::OnIceConnectionReceivingChange(bool receiving) {
-    // Implementation will go here
 }
 
 void DirectPeer::SetRemoteDescription(const std::string& sdp) {
@@ -331,3 +340,39 @@ void DirectPeer::AddIceCandidate(const std::string& candidate_sdp) {
     });
 }
 
+void DirectPeer::OnAddTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver,
+                           const std::vector<rtc::scoped_refptr<webrtc::MediaStreamInterface>>& streams) {
+    RTC_LOG(LS_INFO) << "Track added: " << receiver->track()->id() << " Kind: " << receiver->track()->kind();
+
+    if (receiver->track()->kind() == webrtc::MediaStreamTrackInterface::kVideoKind) {
+        RTC_LOG(LS_INFO) << "Video track added.";
+        auto* video_track = static_cast<webrtc::VideoTrackInterface*>(receiver->track().get());
+        
+        // Ensure we don't add multiple sinks
+        if (!video_sink_) {
+            RTC_LOG(LS_INFO) << "Attaching console video renderer.";
+            video_sink_ = std::make_unique<ConsoleVideoRenderer>();
+            video_track->AddOrUpdateSink(video_sink_.get(), rtc::VideoSinkWants());
+            // Store the track to remove the sink later (optional, depends on structure)
+            // video_track_ = video_track; // Assuming video_track_ is member of DirectPeer
+        } else {
+            RTC_LOG(LS_WARNING) << "Video sink already exists.";
+        }
+    } else if (receiver->track()->kind() == webrtc::MediaStreamTrackInterface::kAudioKind) {
+        RTC_LOG(LS_INFO) << "Audio track added.";
+        // Handle audio track if needed
+    }
+}
+
+void DirectPeer::OnRemoveTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver) {
+    RTC_LOG(LS_INFO) << "Track removed: " << receiver->track()->id();
+    if (receiver->track()->kind() == webrtc::MediaStreamTrackInterface::kVideoKind) {
+        auto* video_track = static_cast<webrtc::VideoTrackInterface*>(receiver->track().get());
+        if (video_sink_) {
+            RTC_LOG(LS_INFO) << "Removing console video renderer.";
+            video_track->RemoveSink(video_sink_.get());
+            video_sink_.reset();
+            // video_track_ = nullptr; // Clear the track reference if stored
+        }
+    }
+}
