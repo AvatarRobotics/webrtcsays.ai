@@ -20,6 +20,7 @@
 #include <vector>
 #include <atomic>
 #include <functional>
+#include <chrono>
 
 #include "absl/memory/memory.h"
 #include "api/audio_codecs/builtin_audio_decoder_factory.h"
@@ -30,12 +31,20 @@
 #include "api/peer_connection_interface.h"
 #include "api/rtc_error.h"
 #include "api/rtp_receiver_interface.h"
+#include "api/rtp_sender_interface.h"
+#include "api/rtp_transceiver_interface.h"
 #include "api/media_stream_interface.h"
 #include "api/data_channel_interface.h"
 #include "api/audio/audio_mixer.h"
 #include "api/audio/audio_processing.h"
+#include "api/scoped_refptr.h"
+#include "api/sequence_checker.h"
+#include "api/set_local_description_observer_interface.h"
+#include "api/set_remote_description_observer_interface.h"
 #include "api/task_queue/default_task_queue_factory.h"
 #include "api/task_queue/task_queue_base.h"
+#include "api/video/video_frame.h"            // Needed for ConsoleVideoRenderer
+#include "api/video/video_sink_interface.h" // Needed for ConsoleVideoRenderer
 #include "api/video_codecs/video_decoder_factory_template.h"
 #include "api/video_codecs/video_decoder_factory_template_dav1d_adapter.h"
 #include "api/video_codecs/video_decoder_factory_template_libvpx_vp8_adapter.h"
@@ -55,6 +64,7 @@
 #include "pc/peer_connection_factory.h"
 #include "pc/session_description.h"
 #include "pc/test/mock_peer_connection_observers.h"
+#include "rtc_base/async_packet_socket.h"
 #include "rtc_base/async_tcp_socket.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
@@ -63,6 +73,7 @@
 #include "rtc_base/physical_socket_server.h"
 #include "rtc_base/ref_counted_object.h"
 #include "rtc_base/rtc_certificate.h"
+#include "rtc_base/socket.h"
 #include "rtc_base/socket_address.h"
 #include "rtc_base/ssl_adapter.h"
 #include "rtc_base/ssl_certificate.h"
@@ -70,6 +81,7 @@
 #include "rtc_base/thread.h"
 #include "rtc_base/virtual_socket_server.h"
 #include "rtc_base/third_party/sigslot/sigslot.h"
+#include "rtc_base/event.h"
 #include "system_wrappers/include/clock.h"
 #include "system_wrappers/include/field_trial.h"
 #include "option.h"
@@ -133,7 +145,9 @@ class ConsoleVideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> 
  public:
   void OnFrame(const webrtc::VideoFrame& frame) override {
     if(!received_frame_) {
-      RTC_LOG(LS_INFO) << "Received video frame: " << frame.width() << "x"
+    rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer(
+        frame.video_frame_buffer());
+      RTC_LOG(LS_INFO) << "Received video frame (" << buffer->type() << ") " << frame.width() << "x"
                        << frame.height() << " timestamp=" << frame.timestamp_us();
       // For simplicity, we just log. Actual rendering is complex in console.
       received_frame_ = true;
@@ -298,6 +312,11 @@ class DIRECT_API DirectPeer : public DirectApplication {
     }
   }
 
+  // Method for external logic to wait for the closed signal
+  bool WaitUntilConnectionClosed(int give_up_after_ms);
+  // Method to reset the event before a new connection attempt
+  void ResetConnectionClosedEvent();
+
   // Override DirectApplication methods
   virtual void HandleMessage(rtc::AsyncPacketSocket* socket,
                              const std::string& message,
@@ -313,14 +332,13 @@ class DIRECT_API DirectPeer : public DirectApplication {
   void OnRemoveTrack(
       rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver) override;
   void OnIceCandidate(const webrtc::IceCandidateInterface* candidate) override;
+  void OnSignalingChange(
+      webrtc::PeerConnectionInterface::SignalingState new_state) override;
+  void OnIceConnectionChange(webrtc::PeerConnectionInterface::IceConnectionState new_state) override;
 
  protected:
   // Override the virtual shutdown method from DirectApplication
   void ShutdownInternal() override;
-
-  // Keep the old Shutdown method signature if needed for direct calls, 
-  // but it should likely just call ShutdownInternal now.
-  // void Shutdown(); 
 
   bool is_caller() const { return opts_.mode == "caller"; }
   webrtc::PeerConnectionInterface* peer_connection() const {
@@ -344,31 +362,36 @@ class DIRECT_API DirectPeer : public DirectApplication {
       set_local_description_observer_;
   rtc::scoped_refptr<LambdaSetRemoteDescriptionObserver>
       set_remote_description_observer_;
+
+  // Event to signal complete connection closure
+  rtc::Event connection_closed_event_;
 };
 
 class DIRECT_API DirectCallee : public DirectPeer, public sigslot::has_slots<> {
  public:
   explicit DirectCallee(Options opts);
-  ~DirectCallee() override;
+  virtual ~DirectCallee();
 
-  // Start listening for incoming connections
   bool StartListening();
 
- private:
-  void OnNewConnection(rtc::AsyncListenSocket* socket,
-                       rtc::AsyncPacketSocket* new_socket);
+ protected:
+  // Signal handlers
+  void OnNewConnection(rtc::AsyncListenSocket* socket, rtc::AsyncPacketSocket* new_socket);
   void OnMessage(rtc::AsyncPacketSocket* socket,
                  const unsigned char* data,
                  size_t len,
                  const rtc::SocketAddress& remote_addr);
 
+  // Callee does not initiate connection, overrides base class
+  bool Connect() { return false; }
+
+ private:
   int local_port_;
-  // std::unique_ptr<rtc::AsyncTCPSocket> tcp_socket_;
-  std::unique_ptr<rtc::AsyncTcpListenSocket>
-      listen_socket_;  // Changed to unique_ptr
+  std::unique_ptr<rtc::AsyncTcpListenSocket> listen_socket_;
+  std::unique_ptr<rtc::AsyncTCPSocket> current_client_socket_; // Dedicated client socket
 };
 
-class DIRECT_API DirectCaller : public DirectPeer, public sigslot::has_slots<> {
+class DIRECT_API DirectCaller : public DirectPeer {
  public:
   explicit DirectCaller(Options opts);
   ~DirectCaller() override;
@@ -390,6 +413,7 @@ class DIRECT_API DirectCaller : public DirectPeer, public sigslot::has_slots<> {
 
   rtc::SocketAddress remote_addr_;
   // std::unique_ptr<rtc::AsyncTCPSocket> tcp_socket_;
+  std::chrono::steady_clock::time_point last_disconnect_time_;
 };
 
 #endif  // WEBRTC_DIRECT_DIRECT_H_

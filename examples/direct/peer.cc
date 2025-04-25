@@ -77,6 +77,9 @@ void DirectPeer::ShutdownInternal() {
 
 void DirectPeer::Start() {
 
+  // Reset the closed event before starting a new connection attempt
+  ResetConnectionClosedEvent();
+
   signaling_thread()->PostTask([this]() {
 
     if(peer_connection_ == nullptr) {
@@ -375,4 +378,35 @@ void DirectPeer::OnRemoveTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterface> 
             // video_track_ = nullptr; // Clear the track reference if stored
         }
     }
+}
+
+// PeerConnectionObserver implementation
+void DirectPeer::OnSignalingChange(webrtc::PeerConnectionInterface::SignalingState new_state) {
+    // Log the raw enum value since SignalingStateToString is removed
+    RTC_LOG(LS_INFO) << "PeerConnection SignalingState changed to: " << static_cast<int>(new_state);
+}
+
+void DirectPeer::OnIceConnectionChange(webrtc::PeerConnectionInterface::IceConnectionState new_state) {
+    // Log the raw enum value since IceConnectionStateToString is removed
+    RTC_LOG(LS_INFO) << "PeerConnection IceConnectionState changed to: " << static_cast<int>(new_state);
+    // This is the key callback for knowing the connection is truly down
+    if (new_state == webrtc::PeerConnectionInterface::kIceConnectionClosed ||
+        new_state == webrtc::PeerConnectionInterface::kIceConnectionFailed) {
+        RTC_LOG(LS_INFO) << "Connection closed or failed. Signaling event.";
+        connection_closed_event_.Set(); // Signal the event
+        // Here you would signal your main application logic that it's safe to attempt reconnect.
+        // For example, set a flag that Connect() can check:
+        // is_fully_closed_ = true; // (Need to add this flag to DirectPeer/Application)
+    }
+}
+
+// Method for external logic to wait for the closed signal
+bool DirectPeer::WaitUntilConnectionClosed(int give_up_after_ms) {
+    RTC_LOG(LS_INFO) << "Waiting for connection closed event...";
+    return connection_closed_event_.Wait(webrtc::TimeDelta::Millis(give_up_after_ms));
+}
+
+// Method to reset the event before a new connection attempt
+void DirectPeer::ResetConnectionClosedEvent() {
+    connection_closed_event_.Reset();
 }

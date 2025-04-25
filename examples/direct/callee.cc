@@ -103,7 +103,7 @@ void DirectCallee::OnNewConnection(rtc::AsyncListenSocket* listen_socket,
 
     // Use a pointer to the specific socket for this connection
     rtc::AsyncTCPSocket* current_client_socket = static_cast<rtc::AsyncTCPSocket*>(new_socket);
-    RTC_LOG(LS_INFO) << "Connection accepted from " << current_client_socket->GetRemoteAddress().ToString();
+    RTC_LOG(LS_INFO) << "Connection accepted from " << current_client_socket->GetRemoteAddress().ToString() << " on socket (" << new_socket << ")";
 
     // Overwrite the base class socket - assumes only one active connection for SendMessage
     // If supporting multiple clients, this needs rethinking.
@@ -147,7 +147,7 @@ void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
         if (socket == tcp_socket_.get()) {
             tcp_socket_->Close();
             tcp_socket_.reset();
-            Disconnect();
+            StartListening();
         } else {
             RTC_LOG(LS_WARNING) << "Received CANCEL on an unexpected or outdated socket pointer";
         }

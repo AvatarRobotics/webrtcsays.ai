@@ -18,6 +18,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h> // For errno
+#include <chrono>
 
 #include "direct.h"
 
@@ -77,7 +78,7 @@ bool DirectCaller::Connect() {
             return false;
         }
 
-        RTC_LOG(LS_INFO) << "Raw socket connected successfully";
+        RTC_LOG(LS_INFO) << "Raw socket (" << raw_socket << ") connected successfully";
 
         // Wrap the connected socket using DirectApplication::WrapSocket to track it
         auto* wrapped_socket = WrapSocket(raw_socket); // Use inherited WrapSocket
@@ -134,5 +135,16 @@ void DirectCaller::OnMessage(rtc::AsyncPacketSocket* socket,
 
 void DirectCaller::Disconnect() {
     RTC_LOG(LS_INFO) << "Caller signaling disconnect, sending CANCEL.";
-    SendMessage("CANCEL"); // Send CANCEL to signal disconnect without shutdown
+    // Update timestamp *before* signaling/shutdown
+    last_disconnect_time_ = std::chrono::steady_clock::now(); 
+    if (SendMessage("CANCEL")) { // Send CANCEL to signal disconnect without shutdown
+        RTC_LOG(LS_INFO) << "CANCEL message sent successfully.";
+    } else {
+        RTC_LOG(LS_WARNING) << "Failed to send CANCEL message.";
+    }
+    // Initiate the PeerConnection close process directly via the virtual method
+    RTC_LOG(LS_INFO) << "Calling ShutdownInternal to close PeerConnection.";
+    ShutdownInternal(); 
+    // // Call the base class Disconnect to close the socket and reset PeerConnection
+    // DirectApplication::Disconnect(); // REMOVED - Let ShutdownInternal handle PC, external logic handles socket if needed after Wait
 }
