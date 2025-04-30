@@ -88,9 +88,18 @@
 
 #ifdef WEBRTC_SPEECH_DEVICES
 #include "modules/audio_device/speech/speech_audio_device_factory.h"
-#endif
+#endif  // WEBRTC_SPEECH_DEVICES
 
 #include "rtc_base/system/rtc_export.h"
+
+// Inject Obj-C forward declarations only:
+#ifdef __OBJC__
+#import "sdk/objc/base/RTCVideoCapturer.h"
+#import "sdk/objc/components/renderer/metal/RTCMTLVideoView.h"
+#endif
+
+// Only include the C++ API for C++ consumers
+#ifdef __cplusplus
 
 class LambdaCreateSessionDescriptionObserver
     : public webrtc::CreateSessionDescriptionObserver {
@@ -162,21 +171,21 @@ class ConsoleVideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> 
 class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
  public:
   DirectApplication();
-  virtual ~DirectApplication();
+  ~DirectApplication() override;
 
   // Initialize threads and basic WebRTC infrastructure
   bool DIRECT_API Initialize();
   bool CreatePeerConnection(Options opts);
 
   // Run the application event loop
-  void DIRECT_API Run();
-  void DIRECT_API RunOnBackgroundThread();
+  void Run();
+  void RunOnBackgroundThread();
 
   // Signal to quit the application
   void SignalQuit() { should_quit_ = true; }
 
   // Disconnect active connections without destroying core resources
-  virtual void DIRECT_API Disconnect();
+  virtual void Disconnect();
 
   static void DIRECT_API rtcInitialize();
   static void DIRECT_API rtcCleanup();
@@ -187,6 +196,19 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
 
   rtc::PhysicalSocketServer *pss() { return pss_; }
   rtc::BasicNetworkManager *network_manager() { return network_manager_; }
+
+  // Allow host to inject a custom video source before starting
+  virtual bool SetVideoSource(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> video_source);
+
+  // Allow host to inject a custom video sink before starting
+  virtual bool SetVideoSink(std::unique_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> video_sink);
+
+  // Set video capturer from Objective-C
+#ifdef __OBJC__
+  void SetVideoCapturer(RTC_OBJC_TYPE(RTCVideoCapturer)* capturer);
+  void SetVideoRenderer(RTC_OBJC_TYPE(RTCMTLVideoView)* renderer);
+#endif
+
  protected:
   // Virtual method for derived classes to implement specific shutdown logic
   virtual void ShutdownInternal() {}
@@ -220,6 +242,12 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
     }
   }
 
+  // Video track and sink
+  rtc::scoped_refptr<webrtc::VideoTrackInterface> video_track_ = nullptr;
+  // Video sink provided by host (e.g. Obj-C app)
+  std::unique_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> video_sink_;
+  rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> video_source_ = nullptr;
+  
   void Cleanup();
 
   void QuitThreads() {
@@ -257,22 +285,25 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
 
   static constexpr int kDebugNoEncryptionMode = true;
 
-  void OnSignalingChange(
-      webrtc::PeerConnectionInterface::SignalingState new_state) {}
+  // Implemented virtual methods from PeerConnectionObserver
   void OnAddTrack(
     rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver,
-      const std::vector<rtc::scoped_refptr<webrtc::MediaStreamInterface>>& streams) {}
+      const std::vector<rtc::scoped_refptr<webrtc::MediaStreamInterface>>& streams) override;
   void OnRemoveTrack(
-      rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver) {}
+      rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver) override;
+
+  //Not yet implemented virtual methods from PeerConnectionObserver
+  void OnSignalingChange(
+      webrtc::PeerConnectionInterface::SignalingState new_state) override {}
   void OnDataChannel(
-      rtc::scoped_refptr<webrtc::DataChannelInterface> channel) {}
-  void OnRenegotiationNeeded() {}
+      rtc::scoped_refptr<webrtc::DataChannelInterface> channel) override {}
+  void OnRenegotiationNeeded() override {}
   void OnIceConnectionChange(
-      webrtc::PeerConnectionInterface::IceConnectionState new_state) {}
+      webrtc::PeerConnectionInterface::IceConnectionState new_state) override {}
   void OnIceGatheringChange(
-      webrtc::PeerConnectionInterface::IceGatheringState new_state) {}
-  void OnIceCandidate(const webrtc::IceCandidateInterface* candidate) {}
-  void OnIceConnectionReceivingChange(bool receiving) {}
+      webrtc::PeerConnectionInterface::IceGatheringState new_state) override {}
+  void OnIceCandidate(const webrtc::IceCandidateInterface* candidate) override {}
+  void OnIceConnectionReceivingChange(bool receiving) override {}
 
  private:
   std::unique_ptr<rtc::Thread> main_thread_;
@@ -326,11 +357,6 @@ class DIRECT_API DirectPeer : public DirectApplication {
 
   // PeerConnectionObserver implementation (inherited via DirectApplication)
   // Add overrides here if DirectApplication declares them virtual
-  void OnAddTrack(
-      rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver,
-      const std::vector<rtc::scoped_refptr<webrtc::MediaStreamInterface>>& streams) override;
-  void OnRemoveTrack(
-      rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver) override;
   void OnIceCandidate(const webrtc::IceCandidateInterface* candidate) override;
   void OnSignalingChange(
       webrtc::PeerConnectionInterface::SignalingState new_state) override;
@@ -352,8 +378,7 @@ class DIRECT_API DirectPeer : public DirectApplication {
  private:
   Options opts_;  // Store command line options
   rtc::scoped_refptr<webrtc::AudioTrackInterface> audio_track_;
-  rtc::scoped_refptr<webrtc::VideoTrackInterface> video_track_;
-  std::unique_ptr<ConsoleVideoRenderer> video_sink_;
+
   std::vector<std::string> pending_ice_candidates_;
 
   rtc::scoped_refptr<LambdaCreateSessionDescriptionObserver>
@@ -399,7 +424,7 @@ class DIRECT_API DirectCaller : public DirectPeer {
   // Connect and send messages
   bool Connect();
   // bool SendMessage(const std::string& message);
-  virtual void DIRECT_API Disconnect() override;
+  virtual void Disconnect() override;
 
  private:
   // Called when data is received on the socket
@@ -416,4 +441,5 @@ class DIRECT_API DirectCaller : public DirectPeer {
   std::chrono::steady_clock::time_point last_disconnect_time_;
 };
 
+#endif  // __cplusplus
 #endif  // WEBRTC_DIRECT_DIRECT_H_

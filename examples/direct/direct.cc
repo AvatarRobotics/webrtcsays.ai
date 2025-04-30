@@ -59,6 +59,14 @@ void DirectApplication::Cleanup() {
   // Explicitly close and release PeerConnection via Shutdown before stopping threads
   ShutdownInternal();
 
+  // Remove sink before closing the connection
+  if (video_track_ && video_sink_) {
+      RTC_LOG(LS_INFO) << "Removing video sink.";
+      // Assuming video_track_ is accessed/modified only on signaling thread after creation
+      video_track_->RemoveSink(video_sink_.get());
+      video_sink_ = nullptr;
+  }
+
   // Reset factory on signaling thread before stopping threads
   if (signaling_thread()->IsCurrent()) { // Avoid blocking call if already on signaling thread
        if (peer_connection_factory_) {
@@ -330,9 +338,9 @@ bool DirectApplication::CreatePeerConnection(Options opts_) {
       webrtc::CreateBuiltinAudioDecoderFactory(),
       // Pass nullptr for video factories to use internal defaults
       opts_.video ? \
-      std::make_unique<webrtc::VideoEncoderFactoryTemplate<webrtc::LibvpxVp8EncoderTemplateAdapter>>() : nullptr,
+      std::make_unique<webrtc::VideoEncoderFactoryTemplate<webrtc::OpenH264EncoderTemplateAdapter>>() : nullptr,
       opts_.video ? \
-      std::make_unique<webrtc::VideoDecoderFactoryTemplate<webrtc::LibvpxVp8DecoderTemplateAdapter>>(): nullptr, // video_encoder_factory
+      std::make_unique<webrtc::VideoDecoderFactoryTemplate<webrtc::OpenH264DecoderTemplateAdapter>>(): nullptr, // video_encoder_factory
       nullptr, // audio_mixer
       nullptr  // audio_processing
   );
@@ -538,4 +546,62 @@ rtc::Socket* DirectApplication::CreateSocket(int family, int type) {
     tracked_sockets_.push_back(socket);
   }
   return socket;
+}
+
+void DirectApplication::OnAddTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver,
+                           const std::vector<rtc::scoped_refptr<webrtc::MediaStreamInterface>>& streams) {
+    RTC_LOG(LS_INFO) << "Track added: " << receiver->track()->id() << " Kind: " << receiver->track()->kind();
+
+    if (receiver->track()->kind() == webrtc::MediaStreamTrackInterface::kVideoKind) {
+        RTC_LOG(LS_INFO) << "Video track added.";
+        auto* video_track = static_cast<webrtc::VideoTrackInterface*>(receiver->track().get());
+        
+        // Ensure we don't add multiple sinks
+        if (video_sink_) {
+            video_track->AddOrUpdateSink(video_sink_.get(), rtc::VideoSinkWants());
+        }
+    } else if (receiver->track()->kind() == webrtc::MediaStreamTrackInterface::kAudioKind) {
+        RTC_LOG(LS_INFO) << "Audio track added.";
+        // Handle audio track if needed
+    }
+}
+
+void DirectApplication::OnRemoveTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver) {
+    RTC_LOG(LS_INFO) << "Track removed: " << receiver->track()->id();
+    if (receiver->track()->kind() == webrtc::MediaStreamTrackInterface::kVideoKind) {
+        auto* video_track = static_cast<webrtc::VideoTrackInterface*>(receiver->track().get());
+        if (video_sink_) {
+            RTC_LOG(LS_INFO) << "Removing console video renderer.";
+            video_track->RemoveSink(video_sink_.get());
+            video_sink_ = nullptr;
+            // video_track_ = nullptr; // Clear the track reference if stored
+        }
+    }
+}
+
+// Store an external video source (injected by host) for use when creating video tracks.
+bool DirectApplication::SetVideoSource(
+    rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> video_source) {
+  // Ensure assignment happens on the signaling thread for safety.
+  if (rtc::Thread::Current() != signaling_thread()) {
+    signaling_thread()->BlockingCall([this, video_source]() {
+      video_source_ = video_source;
+    });
+  } else {
+      video_source_ = video_source;
+  }
+  return true;
+}
+
+bool DirectApplication::SetVideoSink(
+    std::unique_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> video_sink) {
+  // Ensure assignment happens on the signaling thread for safety.
+  if (rtc::Thread::Current() != signaling_thread()) {
+    signaling_thread()->BlockingCall([this, &video_sink]() {
+      video_sink_ = std::move(video_sink);
+    });
+  } else {
+      video_sink_ = std::move(video_sink);
+  }
+  return true;
 }

@@ -299,7 +299,6 @@ if (is_ios || (is_mac && target_cpu != "x86")) {
       "../sdk:mediaconstraints_objc",
       "../sdk:peerconnectionfactory_base_objc",
       "../sdk:videocapture_objc",
-      "../sdk:videoframebuffer_objc",
       "../sdk:videosource_objc",
     ]
     frameworks = [
@@ -549,7 +548,6 @@ if (is_ios || (is_mac && target_cpu != "x86")) {
         "../sdk:metal_objc",
         "../sdk:mac_framework_objc",
         "../sdk:mac_framework_bundle",
-        "//sdk/objc/native/src:native_src_objc",
       ]
     }
 
@@ -927,6 +925,7 @@ if (!build_with_chromium) {
         "direct/direct.h",
         "direct/option.h",
         "direct/direct.cc",
+        "direct/dirobjc.mm",
         "direct/caller.cc",
         "direct/callee.cc",
         "direct/peer.cc",
@@ -944,9 +943,9 @@ if (!build_with_chromium) {
       }
 
       deps = [
-        # Depend on the header processing action
         ":create_bracket_include_headers_direct_framework",
-        # Keep other dependencies
+        "//sdk/objc/native/src:native_src_objc",
+        "//sdk:native_video",
         "//sdk:framework_objc_signed_bundle",
         "//api:async_dns_resolver",
         "//api:audio_options_api",
@@ -1064,13 +1063,17 @@ if (!build_with_chromium) {
         "../api/audio_codecs:audio_codecs_api",
         "../api/audio_codecs:builtin_audio_decoder_factory",
         "../api/audio_codecs:builtin_audio_encoder_factory",
-        # REMOVE base video codec factory templates as well
-        # "../api/video_codecs:video_decoder_factory_template",
-        # REMOVE specific software codec adapters for iOS
-        # "../api/video_codecs:video_decoder_factory_template_dav1d_adapter",
+        "../api/video_codecs:video_decoder_factory_template",
+        "../api/video_codecs:video_decoder_factory_template_dav1d_adapter",
         "../api/video_codecs:video_decoder_factory_template_libvpx_vp8_adapter",
-        # "../api/video_codecs:video_decoder_factory_template_libvpx_vp9_adapter",
-        # "../api/video_codecs:video_decoder_factory_template_open_h264_adapter", # Keep if needed?
+        "../api/video_codecs:video_decoder_factory_template_libvpx_vp9_adapter",
+        "../api/video_codecs:video_decoder_factory_template_open_h264_adapter",
+        "../api/video_codecs:video_encoder_factory_template",
+        "../api/video_codecs:video_encoder_factory_template_libaom_av1_adapter",
+        "../api/video_codecs:video_encoder_factory_template_libvpx_vp8_adapter",
+        "../api/video_codecs:video_encoder_factory_template_libvpx_vp9_adapter",
+        "../api/video_codecs:video_encoder_factory_template_open_h264_adapter",
+        "//modules/video_coding:webrtc_vp8",
         "../api/task_queue:pending_task_safety_flag",
         "../api/units:time_delta",
         "../api/video:video_frame",
@@ -1099,6 +1102,8 @@ if (!build_with_chromium) {
         "../system_wrappers:field_trial",
         "../test:field_trial",
         "../test:rtp_test_utils",
+        "../test/fake_video_track_source.h",
+        "../rtc_base:task_queue_for_test",
         "//third_party/abseil-cpp/absl/memory",
         "//third_party/jsoncpp:jsoncpp",
       ]

@@ -26,7 +26,6 @@
 #include "pc/test/fake_periodic_video_source.h"
 #include "pc/test/fake_periodic_video_track_source.h"
 #include "api/video/video_frame.h"
-#include "api/video/video_sink_interface.h"
 #include "rtc_base/logging.h"
 
 #include "direct.h"
@@ -43,10 +42,6 @@ DirectPeer::~DirectPeer() {
   if (peer_connection_) {
       ShutdownInternal(); // Ensure cleanup happens
   }
-  // Ensure sink is removed if it exists
-  if (video_track_ && video_sink_) {
-      video_track_->RemoveSink(video_sink_.get());
-  }
 }
 
 void DirectPeer::ShutdownInternal() {
@@ -55,13 +50,6 @@ void DirectPeer::ShutdownInternal() {
     // Perform close and release on the signaling thread
     signaling_thread()->BlockingCall([this]() {
         RTC_DCHECK_RUN_ON(signaling_thread());
-        // Remove sink before closing the connection
-        if (video_track_ && video_sink_) {
-            RTC_LOG(LS_INFO) << "Removing video sink.";
-            // Assuming video_track_ is accessed/modified only on signaling thread after creation
-            video_track_->RemoveSink(video_sink_.get());
-            video_sink_.reset();
-        }
         if (peer_connection_) {
             peer_connection_->Close();
             peer_connection_ = nullptr; // Release ref ptr on signaling thread
@@ -108,28 +96,23 @@ void DirectPeer::Start() {
         RTC_LOG(LS_INFO) << "Initial transceiver direction set: " << 
             (adirection_result.ok() ? "success" : "failed");
     
-        webrtc::FakePeriodicVideoSource::Config config;
-        config.frame_interval_ms = 100;
-        config.timestamp_offset_ms = rtc::TimeMillis();
-        config.width = 1280;
-        config.height = 720;
+        // if video_source_ is not nullptr, create a video track
+        if(opts_.video && video_source_) {
+            video_track_ = peer_connection_factory_->CreateVideoTrack(video_source_, 
+                "video_track");
+            RTC_DCHECK(video_track_.get());
 
-        auto video_source = rtc::make_ref_counted<webrtc::FakePeriodicVideoTrackSource>(
-        config, /* remote */ false);
-        RTC_DCHECK(video_source.get());
-        video_track_ = peer_connection_factory_->CreateVideoTrack(video_source, "video_track");
-        RTC_DCHECK(video_track_.get());
+            webrtc::RtpTransceiverInit vinit;
+            vinit.direction = webrtc::RtpTransceiverDirection::kSendRecv;
+            auto vt_result = peer_connection_->AddTransceiver(video_track_, vinit);
+            RTC_DCHECK(vt_result.ok());
+            auto vtransceiver = vt_result.value();
 
-        webrtc::RtpTransceiverInit vinit;
-        vinit.direction = webrtc::RtpTransceiverDirection::kSendRecv;
-        auto vt_result = peer_connection_->AddTransceiver(video_track_, vinit);
-        RTC_DCHECK(vt_result.ok());
-        auto vtransceiver = vt_result.value();
-
-        // Force the direction immediately after creation
-        auto vdirection_result = vtransceiver->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendRecv);
-        RTC_LOG(LS_INFO) << "Initial transceiver direction set: " << 
-            (vdirection_result.ok() ? "success" : "failed");
+            // Force the direction immediately after creation
+            auto vdirection_result = vtransceiver->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendRecv);
+            RTC_LOG(LS_INFO) << "Initial transceiver direction set: " << 
+                (vdirection_result.ok() ? "success" : "failed");
+        }
 
         webrtc::PeerConnectionInterface::RTCOfferAnswerOptions offer_options;
 
@@ -341,43 +324,6 @@ void DirectPeer::AddIceCandidate(const std::string& candidate_sdp) {
         RTC_LOG(LS_INFO) << "Adding ICE candidate";
         peer_connection_->AddIceCandidate(candidate.get());
     });
-}
-
-void DirectPeer::OnAddTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver,
-                           const std::vector<rtc::scoped_refptr<webrtc::MediaStreamInterface>>& streams) {
-    RTC_LOG(LS_INFO) << "Track added: " << receiver->track()->id() << " Kind: " << receiver->track()->kind();
-
-    if (receiver->track()->kind() == webrtc::MediaStreamTrackInterface::kVideoKind) {
-        RTC_LOG(LS_INFO) << "Video track added.";
-        auto* video_track = static_cast<webrtc::VideoTrackInterface*>(receiver->track().get());
-        
-        // Ensure we don't add multiple sinks
-        if (!video_sink_) {
-            RTC_LOG(LS_INFO) << "Attaching console video renderer.";
-            video_sink_ = std::make_unique<ConsoleVideoRenderer>();
-            video_track->AddOrUpdateSink(video_sink_.get(), rtc::VideoSinkWants());
-            // Store the track to remove the sink later (optional, depends on structure)
-            // video_track_ = video_track; // Assuming video_track_ is member of DirectPeer
-        } else {
-            RTC_LOG(LS_WARNING) << "Video sink already exists.";
-        }
-    } else if (receiver->track()->kind() == webrtc::MediaStreamTrackInterface::kAudioKind) {
-        RTC_LOG(LS_INFO) << "Audio track added.";
-        // Handle audio track if needed
-    }
-}
-
-void DirectPeer::OnRemoveTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver) {
-    RTC_LOG(LS_INFO) << "Track removed: " << receiver->track()->id();
-    if (receiver->track()->kind() == webrtc::MediaStreamTrackInterface::kVideoKind) {
-        auto* video_track = static_cast<webrtc::VideoTrackInterface*>(receiver->track().get());
-        if (video_sink_) {
-            RTC_LOG(LS_INFO) << "Removing console video renderer.";
-            video_track->RemoveSink(video_sink_.get());
-            video_sink_.reset();
-            // video_track_ = nullptr; // Clear the track reference if stored
-        }
-    }
 }
 
 // PeerConnectionObserver implementation
