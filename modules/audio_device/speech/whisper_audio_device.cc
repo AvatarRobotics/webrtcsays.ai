@@ -44,7 +44,9 @@ WhisperAudioDevice::WhisperAudioDevice(
     TaskQueueFactory* task_queue_factory,
     absl::string_view whisperModelFilename,
     absl::string_view llamaModelFilename,
-    absl::string_view wavFilename)
+    absl::string_view llavaMMProjFilename,
+    absl::string_view wavFilename,
+    absl::string_view yuvFilename)
     : _task_queue_factory(task_queue_factory),
       _ptrAudioBuffer(nullptr),
       _recordingBuffer(nullptr),
@@ -55,7 +57,9 @@ WhisperAudioDevice::WhisperAudioDevice(
       _playing(false),
       _whisperModelFilename(whisperModelFilename),
       _llamaModelFilename(llamaModelFilename),
+      _llavaMMProjFilename(llavaMMProjFilename),
       _wavFilename(wavFilename),
+      _yuvFilename(yuvFilename),
       _llama_model(std::filesystem::path(llamaModelFilename).stem())
 {
 }
@@ -131,7 +135,7 @@ void languageResponseCallback(bool success, const char* language, void* user_dat
 
 void llamaResponseCallback(bool success, const char* response, void* user_data) {
   // Handle response here
-  RTC_LOG(LS_VERBOSE) << "Llama response via callback: " << response;
+  RTC_LOG(LS_INFO) << "Llama response via callback: " << response;
   if(success) {
     WhisperAudioDevice* audio_device = static_cast<WhisperAudioDevice*>(user_data);
     audio_device->speakText(std::string(response));
@@ -251,6 +255,10 @@ int32_t WhisperAudioDevice::StartRecording() {
   #endif // defined(PLAY_WAV_ON_RECORD)
 
   speakText(_llama_model + " ready to chat");
+  if(!_yuvFilename.empty()) {
+    _llama_device->askWithImageFile("describe this image", _yuvFilename.c_str(), 300, 300);
+  }
+
   _ptrThreadRec = rtc::PlatformThread::SpawnJoinable(
       [this] {
         while (RecThreadProcess()) {
@@ -449,7 +457,7 @@ int32_t WhisperAudioDevice::InitPlayout() {
   #if defined (LLAMA_ENABLED)
   RTC_LOG(LS_INFO) << "Llama model: '" << _llamaModelFilename << "'";
   WhillatsSetResponseCallback llamaCallback(llamaResponseCallback, this);
-  _llama_device.reset(new WhillatsLlama(_llamaModelFilename.c_str(), llamaCallback));
+  _llama_device.reset(new WhillatsLlama(_llamaModelFilename.c_str(), _llavaMMProjFilename.c_str(), llamaCallback));
 
   if(_llama_device &&  _llama_device->start()) {
     _llaming = true;

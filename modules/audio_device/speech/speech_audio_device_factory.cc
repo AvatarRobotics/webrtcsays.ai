@@ -28,6 +28,7 @@ std::string SpeechAudioDeviceFactory::_whisperModelFilename;
 std::string SpeechAudioDeviceFactory::_llamaModelFilename;
 std::string SpeechAudioDeviceFactory::_llavaMMProjFilename;
 std::string SpeechAudioDeviceFactory::_wavFilename;
+std::string SpeechAudioDeviceFactory::_yuvFilename;
 
 TaskQueueFactory* SpeechAudioDeviceFactory::_taskQueueFactory;
 
@@ -37,6 +38,18 @@ void SpeechAudioDeviceFactory::SetWhisperModelFilename(absl::string_view whisper
 
 void SpeechAudioDeviceFactory::SetLlamaModelFilename(absl::string_view llama_model_filename) {
   _llamaModelFilename = llama_model_filename;
+}
+
+void SpeechAudioDeviceFactory::SetLlavaMMProjFilename(absl::string_view llava_mmproj_filename) {
+  _llavaMMProjFilename = llava_mmproj_filename;
+}
+
+void SpeechAudioDeviceFactory::SetWavFilename(absl::string_view wav_filename) {
+  _wavFilename = wav_filename;
+}
+
+void SpeechAudioDeviceFactory::SetYuvFilename(absl::string_view yuv_filename) {
+  _yuvFilename = yuv_filename;
 }
 
 void SpeechAudioDeviceFactory::SetTaskQueueFactory(TaskQueueFactory* task_queue_factory) {
@@ -74,7 +87,8 @@ AudioDeviceGeneric* SpeechAudioDeviceFactory::CreateSpeechAudioDevice() {
                                                    _whisperModelFilename, 
                                                    _llamaModelFilename, 
                                                    _llavaMMProjFilename,
-                                                   _wavFilename);
+                                                   _wavFilename,
+                                                   _yuvFilename);
     RTC_LOG(LS_INFO) << "Initialized WhisperAudioDevice instance.";
   }
 

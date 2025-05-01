@@ -230,6 +230,10 @@ Options parseOptions(const std::vector<std::string>& args) {
              RTC_LOG(LS_INFO) << "Config initial playout_wav: " << config_json["webrtc_speech_initial_playout_wav"].asString(); // Log value
              opts.webrtc_speech_initial_playout_wav = expandHomePath(config_json["webrtc_speech_initial_playout_wav"].asString());
         }
+        if (config_json.isMember("llama_llava_yuv") && config_json["llama_llava_yuv"].isString()) {
+             RTC_LOG(LS_INFO) << "Config llama_llava_yuv: " << config_json["llama_llava_yuv"].asString(); // Log value
+             opts.llama_llava_yuv = expandHomePath(config_json["llama_llava_yuv"].asString());
+        }
         if (config_json.isMember("address") && config_json["address"].isString()) {
              RTC_LOG(LS_INFO) << "Config address: " << config_json["address"].asString(); // Log value
              opts.address = config_json["address"].asString();
@@ -320,6 +324,8 @@ Options parseOptions(const std::vector<std::string>& args) {
       opts.webrtc_key_path = arg.substr(18);
     } else if (arg.find("--webrtc_speech_initial_playout_wav=") == 0) {
       opts.webrtc_speech_initial_playout_wav = arg.substr(36);
+    } else if (arg.find("--llama_llava_yuv=") == 0) {
+      opts.llama_llava_yuv = arg.substr(16);
     } else if (arg.find("--turns=") == 0) {
       opts.turns = arg.substr(8);
       // Remove single quotes if present

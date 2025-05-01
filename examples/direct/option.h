@@ -77,10 +77,11 @@ struct Options {
     std::string config_path = ""; // Path to JSON config file
     std::string whisper_model;
     std::string llama_model;
-    std::string llama_mmproj;
+    std::string llava_mmproj;
     std::string webrtc_cert_path = "cert.pem";
     std::string webrtc_key_path = "key.pem";
     std::string webrtc_speech_initial_playout_wav = "play.wav";
+    std::string llama_llava_yuv = "test.yuv";
     std::string address = "";
     std::string turns = "";
     std::string vpn = "";

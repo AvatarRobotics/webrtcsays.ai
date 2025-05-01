@@ -36,7 +36,9 @@ class WhisperAudioDevice : public SpeechAudioDevice {
   WhisperAudioDevice(TaskQueueFactory* task_queue_factory,
       absl::string_view whisperModelFilename,
       absl::string_view llamaModelFilename,
-      absl::string_view wavFilename);
+      absl::string_view llavaMMProjFilename,
+      absl::string_view wavFilename,
+      absl::string_view yuvFilename);
   virtual ~WhisperAudioDevice();
 
   // Implement all pure virtual methods from AudioDeviceGeneric
@@ -164,7 +166,9 @@ class WhisperAudioDevice : public SpeechAudioDevice {
 
   std::string _whisperModelFilename;
   std::string _llamaModelFilename;
+  std::string _llavaMMProjFilename;
   std::string _wavFilename;
+  std::string _yuvFilename;
   std::string _llama_model;
 
   FileWrapper _recFile;

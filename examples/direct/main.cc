@@ -18,7 +18,18 @@
 #include "direct.h"
 #include "option.h"
 
+static int g_shutdown = 0;
+
+// Signal handler for Ctrl+C
+void signalHandler(int signal) {
+    if (signal == SIGINT) {
+        std::cout << "\nCtrl+C received, shutting down...\n";
+        g_shutdown = 1;
+    }
+}
+
 int main(int argc, char* argv[]) {
+
   Options opts;
   std::string options;
   if (argc == 1) {
@@ -37,52 +48,63 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
+  // Install signal handler for Ctrl+C
+  signal(SIGINT, signalHandler);
+
   DirectSetLoggingLevel(LoggingSeverity::LS_INFO);
   DirectApplication::rtcInitialize();
+  std::unique_ptr<DirectCallee> callee;
+  std::unique_ptr<DirectCaller> caller;
 
-  opts.mode = "callee";
-  std::unique_ptr<DirectCallee> callee = std::make_unique<DirectCallee>(opts);
-  if (!callee->Initialize()) {
-    fprintf(stderr, "Failed to initialize callee\n");
-    return 1;
-  }
-  if (!callee->StartListening()) {
-    fprintf(stderr, "Failed to start listening\n");
-    return 1;
-  }
-  callee->RunOnBackgroundThread();
-
-  opts.mode = "caller";
-  std::unique_ptr<DirectCaller> caller = std::make_unique<DirectCaller>(opts);
-  if (!caller->Initialize()) {
-    fprintf(stderr, "failed to initialize caller\n");
-    return 1;
-  }
-  if (!caller->Connect()) {
-    // RTC_LOG(LS_ERROR) << "failed to connect"; // Removed logging
-    fprintf(stderr, "failed to connect\n");
-    return 1;
-  }
-  caller->RunOnBackgroundThread();
-
-  usleep(5000000);
-  caller->Disconnect();
-  if (caller->WaitUntilConnectionClosed(5000)) {
-    fprintf(stderr, "Connection closed");
-  } else {
-    fprintf(stderr, "Connection not closed after 5 seconds");
+  if(opts.mode == "callee" or opts.mode == "both") {
+    callee = std::make_unique<DirectCallee>(opts);
+    if (!callee->Initialize()) {
+      fprintf(stderr, "failed to initialize callee\n");
+      return 1;
+    }
+    if (!callee->StartListening()) {
+      fprintf(stderr, "Failed to start listening\n");
+      return 1;
+    }
+    callee->RunOnBackgroundThread();
   }
 
-  // usleep(500000);
-  // caller->Connect();
-  // usleep(500000);
+  if(opts.mode == "caller" or opts.mode == "both") {
+    opts.mode = "caller";
+    caller = std::make_unique<DirectCaller>(opts);
+    if (!caller->Initialize()) {
+      fprintf(stderr, "failed to initialize caller\n");
+      return 1;
+    }
+    if (!caller->Connect()) {
+      fprintf(stderr, "failed to connect\n");
+      return 1;
+    }
+    caller->RunOnBackgroundThread();
+  }
 
-  // Signal both instances to quit before destruction
-  callee->SignalQuit();
-  caller->SignalQuit();
+  while (!g_shutdown) {
+    usleep(100000);
+  }
 
-  callee.reset();
-  caller.reset();
+  if(opts.mode == "caller" or opts.mode == "both") {
+    caller->Disconnect();
+    if (caller->WaitUntilConnectionClosed(5000)) {
+      fprintf(stderr, "Connection closed");
+    } else {
+      fprintf(stderr, "Connection not closed after 5 seconds");
+    }
+  }
+
+  if(opts.mode == "callee" or opts.mode == "both") {
+    callee->SignalQuit();
+    callee.reset();
+  }
+
+  if(opts.mode == "caller" or opts.mode == "both") {
+    caller->SignalQuit();
+    caller.reset();
+  }
 
   // Allow some time for threads to process quit
   usleep(50000);

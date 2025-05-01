@@ -301,6 +301,8 @@ bool DirectApplication::CreatePeerConnection() {
     kAudioDeviceModuleType = webrtc::AudioDeviceModule::kSpeechAudio;
     webrtc::SpeechAudioDeviceFactory::SetWhisperModelFilename(opts_.whisper_model);
     webrtc::SpeechAudioDeviceFactory::SetLlamaModelFilename(opts_.llama_model);
+    webrtc::SpeechAudioDeviceFactory::SetLlavaMMProjFilename(opts_.llava_mmproj);
+    webrtc::SpeechAudioDeviceFactory::SetYuvFilename(opts_.llama_llava_yuv);
   }
 #endif // WEBRTC_SPEECH_DEVICES
 
