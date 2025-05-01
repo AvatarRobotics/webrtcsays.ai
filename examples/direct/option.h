@@ -77,6 +77,7 @@ struct Options {
     std::string config_path = ""; // Path to JSON config file
     std::string whisper_model;
     std::string llama_model;
+    std::string llama_mmproj;
     std::string webrtc_cert_path = "cert.pem";
     std::string webrtc_key_path = "key.pem";
     std::string webrtc_speech_initial_playout_wav = "play.wav";

@@ -986,6 +986,7 @@ if (!build_with_chromium) {
         "//system_wrappers:field_trial",
         "//third_party/abseil-cpp/absl/memory",
         "//third_party/jsoncpp:jsoncpp",
+        "//pc:pc_test_utils"
       ]
 
       frameworks = [
@@ -1048,7 +1049,7 @@ if (!build_with_chromium) {
       }
 
       deps = [
-        "//sdk/dylib:webrtc_dylib",
+        #"//sdk/dylib:webrtc_dylib",
         # ... (keep original deps for non-iOS) ...
         "../api:async_dns_resolver",
         "../api:audio_options_api",
@@ -1102,7 +1103,6 @@ if (!build_with_chromium) {
         "../system_wrappers:field_trial",
         "../test:field_trial",
         "../test:rtp_test_utils",
-        "../test/fake_video_track_source.h",
         "../rtc_base:task_queue_for_test",
         "//third_party/abseil-cpp/absl/memory",
         "//third_party/jsoncpp:jsoncpp",

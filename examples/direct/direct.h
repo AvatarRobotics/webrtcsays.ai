@@ -170,12 +170,12 @@ class ConsoleVideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> 
 
 class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
  public:
-  DirectApplication();
+  DirectApplication(Options opts);
   ~DirectApplication() override;
 
   // Initialize threads and basic WebRTC infrastructure
   bool DIRECT_API Initialize();
-  bool CreatePeerConnection(Options opts);
+  bool CreatePeerConnection();
 
   // Run the application event loop
   void Run();
@@ -210,6 +210,9 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
 #endif
 
  protected:
+  Options opts_;  // Store command line options
+  bool is_caller() const { return opts_.mode == "caller"; }
+
   // Virtual method for derived classes to implement specific shutdown logic
   virtual void ShutdownInternal() {}
 
@@ -366,7 +369,6 @@ class DIRECT_API DirectPeer : public DirectApplication {
   // Override the virtual shutdown method from DirectApplication
   void ShutdownInternal() override;
 
-  bool is_caller() const { return opts_.mode == "caller"; }
   webrtc::PeerConnectionInterface* peer_connection() const {
     return peer_connection_.get();
   }
@@ -376,7 +378,6 @@ class DIRECT_API DirectPeer : public DirectApplication {
   void AddIceCandidate(const std::string& candidate_sdp);
 
  private:
-  Options opts_;  // Store command line options
   rtc::scoped_refptr<webrtc::AudioTrackInterface> audio_track_;
 
   std::vector<std::string> pending_ice_candidates_;

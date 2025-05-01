@@ -26,7 +26,9 @@ namespace webrtc {
 
 std::string SpeechAudioDeviceFactory::_whisperModelFilename;
 std::string SpeechAudioDeviceFactory::_llamaModelFilename;
+std::string SpeechAudioDeviceFactory::_llavaMMProjFilename;
 std::string SpeechAudioDeviceFactory::_wavFilename;
+
 TaskQueueFactory* SpeechAudioDeviceFactory::_taskQueueFactory;
 
 void SpeechAudioDeviceFactory::SetWhisperModelFilename(absl::string_view whisper_model_filename) {
@@ -71,6 +73,7 @@ AudioDeviceGeneric* SpeechAudioDeviceFactory::CreateSpeechAudioDevice() {
     whisper_audio_device = new WhisperAudioDevice(_taskQueueFactory, 
                                                    _whisperModelFilename, 
                                                    _llamaModelFilename, 
+                                                   _llavaMMProjFilename,
                                                    _wavFilename);
     RTC_LOG(LS_INFO) << "Initialized WhisperAudioDevice instance.";
   }

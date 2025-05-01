@@ -32,8 +32,7 @@
 
 DirectPeer::DirectPeer(
     Options opts) 
-  : DirectApplication(), 
-    opts_(opts)
+  : DirectApplication(opts)
 {
 }
 
@@ -71,7 +70,7 @@ void DirectPeer::Start() {
   signaling_thread()->PostTask([this]() {
 
     if(peer_connection_ == nullptr) {
-        if (!CreatePeerConnection(opts_)) {
+        if (!CreatePeerConnection()) {
             RTC_LOG(LS_ERROR) << "Failed to create peer connection";
             return;
         }
@@ -93,11 +92,16 @@ void DirectPeer::Start() {
 
         // Force the direction immediately after creation
         auto adirection_result = atransceiver->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendRecv);
-        RTC_LOG(LS_INFO) << "Initial transceiver direction set: " << 
-            (adirection_result.ok() ? "success" : "failed");
+        RTC_LOG(LS_INFO) << "Initial audio transceiver direction set for " << (is_caller() ? "caller" : "callee")
+            << ", result:" << (adirection_result.ok() ? "success" : "failed");
     
         // if video_source_ is not nullptr, create a video track
-        if(opts_.video && video_source_) {
+        if(opts_.video) {
+            if(!video_source_) {
+                RTC_LOG(LS_ERROR) << "Video source not set, adding fake video source";
+                video_source_ = rtc::make_ref_counted<webrtc::FakePeriodicVideoTrackSource>(1000); 
+            }
+
             video_track_ = peer_connection_factory_->CreateVideoTrack(video_source_, 
                 "video_track");
             RTC_DCHECK(video_track_.get());
@@ -110,8 +114,8 @@ void DirectPeer::Start() {
 
             // Force the direction immediately after creation
             auto vdirection_result = vtransceiver->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendRecv);
-            RTC_LOG(LS_INFO) << "Initial transceiver direction set: " << 
-                (vdirection_result.ok() ? "success" : "failed");
+            RTC_LOG(LS_INFO) << "Initial video transceiver direction set for " << (is_caller() ? "caller" : "callee")
+                << ", result:" << (vdirection_result.ok() ? "success" : "failed");
         }
 
         webrtc::PeerConnectionInterface::RTCOfferAnswerOptions offer_options;

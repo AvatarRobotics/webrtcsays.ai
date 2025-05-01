@@ -40,7 +40,9 @@ rtc::IPAddress IPFromString(absl::string_view str) {
 }
 
 // DirectApplication Implementation
-DirectApplication::DirectApplication() {
+DirectApplication::DirectApplication(Options opts)
+  : opts_(opts)
+{
 
   main_thread_ = rtc::Thread::CreateWithSocketServer();
   main_thread_->socketserver()->SetMessageQueue(main_thread_.get());
@@ -254,7 +256,7 @@ bool DirectApplication::Initialize() {
   return true;
 }
 
-bool DirectApplication::CreatePeerConnection(Options opts_) {
+bool DirectApplication::CreatePeerConnection() {
 
   RTC_LOG(LS_INFO) << "Creating peer connection";
 
@@ -553,10 +555,14 @@ void DirectApplication::OnAddTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterfa
     RTC_LOG(LS_INFO) << "Track added: " << receiver->track()->id() << " Kind: " << receiver->track()->kind();
 
     if (receiver->track()->kind() == webrtc::MediaStreamTrackInterface::kVideoKind) {
-        RTC_LOG(LS_INFO) << "Video track added.";
+        RTC_LOG(LS_INFO) << "Video track added for " << (is_caller() ? "caller" : "callee");
         auto* video_track = static_cast<webrtc::VideoTrackInterface*>(receiver->track().get());
         
         // Ensure we don't add multiple sinks
+        if(!video_sink_) {
+            video_sink_ = std::make_unique<ConsoleVideoRenderer>();
+        }
+        
         if (video_sink_) {
             video_track->AddOrUpdateSink(video_sink_.get(), rtc::VideoSinkWants());
         }
@@ -571,10 +577,9 @@ void DirectApplication::OnRemoveTrack(rtc::scoped_refptr<webrtc::RtpReceiverInte
     if (receiver->track()->kind() == webrtc::MediaStreamTrackInterface::kVideoKind) {
         auto* video_track = static_cast<webrtc::VideoTrackInterface*>(receiver->track().get());
         if (video_sink_) {
-            RTC_LOG(LS_INFO) << "Removing console video renderer.";
+            RTC_LOG(LS_INFO) << "Removing video track for " << (is_caller() ? "caller" : "callee");
             video_track->RemoveSink(video_sink_.get());
             video_sink_ = nullptr;
-            // video_track_ = nullptr; // Clear the track reference if stored
         }
     }
 }
@@ -590,6 +595,8 @@ bool DirectApplication::SetVideoSource(
   } else {
       video_source_ = video_source;
   }
+
+  RTC_LOG(LS_INFO) << "Video source set for " << (is_caller() ? "caller" : "callee");
   return true;
 }
 
@@ -603,5 +610,7 @@ bool DirectApplication::SetVideoSink(
   } else {
       video_sink_ = std::move(video_sink);
   }
+
+  RTC_LOG(LS_INFO) << "Video sink set for " << (is_caller() ? "caller" : "callee");
   return true;
 }

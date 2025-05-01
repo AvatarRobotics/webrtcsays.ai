@@ -142,6 +142,7 @@ Options parseOptions(const std::vector<std::string>& args) {
       "  --video, --no-video                Enable/disable video (default: disabled)\n" // Added video help
       "  --whisper_model=<path>             Path to whisper model\n"
       "  --llama_model=<path>               Path to llama model\n"
+      "  --llava_mmproj=<path>              Path to llava mmproj model\n"
       "  --webrtc_cert_path=<path>          Path to WebRTC certificate (default: 'cert.pem')\n"
       "  --webrtc_key_path=<path>           Path to WebRTC key (default: 'key.pem')\n"
       "  --turns=<ip,username,password>     Secured turn server address, e.g. \n"
@@ -212,6 +213,10 @@ Options parseOptions(const std::vector<std::string>& args) {
         if (config_json.isMember("llama_model") && config_json["llama_model"].isString()) {
              RTC_LOG(LS_INFO) << "Config llama_model: " << config_json["llama_model"].asString(); // Log value
              opts.llama_model = expandHomePath(config_json["llama_model"].asString());
+        }
+        if (config_json.isMember("llava_mmproj") && config_json["llava_mmproj"].isString()) {
+             RTC_LOG(LS_INFO) << "Config llava_mmproj: " << config_json["llava_mmproj"].asString(); // Log value
+             opts.llava_mmproj = expandHomePath(config_json["llava_mmproj"].asString());
         }
         if (config_json.isMember("webrtc_cert_path") && config_json["webrtc_cert_path"].isString()) {
              RTC_LOG(LS_INFO) << "Config webrtc_cert_path: " << config_json["webrtc_cert_path"].asString(); // Log value
@@ -307,6 +312,8 @@ Options parseOptions(const std::vector<std::string>& args) {
       opts.whisper_model = arg.substr(16);  // Length of "--whisper_model="
     } else if (arg.find("--llama_model=") == 0) {
       opts.llama_model = arg.substr(14);  // Length of "--llama_model="
+    } else if (arg.find("--llava_mmproj=") == 0) {
+      opts.llava_mmproj = arg.substr(14);  // Length of "--llava_mmproj="
     } else if (arg.find("--webrtc_cert_path=") == 0) {
       opts.webrtc_cert_path = arg.substr(19);
     } else if (arg.find("--webrtc_key_path=") == 0) {
@@ -430,6 +437,7 @@ std::string getUsage(const Options opts) {
   if (opts.whisper) { // Only show model paths if whisper is enabled
       usage << "Whisper Model: " << (!opts.whisper_model.empty() ? opts.whisper_model : "(not set)") << "\\n";
       usage << "Llama Model: " << (!opts.llama_model.empty() ? opts.llama_model : "(not set)") << "\\n";
+      usage << "Llava MMProj: " << (!opts.llava_mmproj.empty() ? opts.llava_mmproj : "(not set)") << "\\n";
   }
   usage << "WebRTC Cert Path: " << opts.webrtc_cert_path << "\\n";
   usage << "WebRTC Key Path: " << opts.webrtc_key_path << "\\n";

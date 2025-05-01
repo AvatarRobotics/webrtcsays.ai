@@ -31,6 +31,7 @@ class SpeechAudioDeviceFactory {
   static AudioDeviceGeneric* CreateSpeechAudioDevice();
   static void SetWhisperModelFilename(absl::string_view whisper_model_filename);
   static void SetLlamaModelFilename(absl::string_view llama_model_filename);
+  static void SetLlavaMMProjFilename(absl::string_view llama_mmproj_filename);
   static void SetTaskQueueFactory(TaskQueueFactory* task_queue_factory);
 
  private:
@@ -40,6 +41,8 @@ class SpeechAudioDeviceFactory {
   static std::string _whisperModelFilename;
   // The input llama model file must be a gguf file
   static std::string _llamaModelFilename;
+  // The input llava mmproj file must be a gguf file
+  static std::string _llavaMMProjFilename;
   // This is a wav file, 16k samples, 16 bit PCM, to play out on beginning
   static std::string _wavFilename;
   static TaskQueueFactory* _taskQueueFactory;
