@@ -255,9 +255,6 @@ int32_t WhisperAudioDevice::StartRecording() {
   #endif // defined(PLAY_WAV_ON_RECORD)
 
   speakText(_llama_model + " ready to chat");
-  if(!_yuvFilename.empty()) {
-    _llama_device->askWithImageFile("describe this image", _yuvFilename.c_str(), 300, 300);
-  }
 
   _ptrThreadRec = rtc::PlatformThread::SpawnJoinable(
       [this] {

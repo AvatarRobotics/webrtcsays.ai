@@ -966,10 +966,9 @@ if (!build_with_chromium) {
 
       cflags = [ "-g", "-O0" ]
       include_dirs += [ "../third_party/boringssl/src/include" ]
-      #if (rtc_use_speech_audio_devices) {
-      #  defines += [ "WEBRTC_SPEECH_DEVICES" ]
-      #  include_dirs += [ "../modules/third_party/espeak-ng/src/include" ]
-      #}
+      if (rtc_use_speech_audio_devices) {
+        defines += [ "WEBRTC_SPEECH_DEVICES" ]
+      }
 
       deps = [
         ":create_bracket_include_headers_direct_framework",
@@ -1077,12 +1076,14 @@ if (!build_with_chromium) {
         "direct/option.cc",
       ]
 
+      if (rtc_use_speech_audio_devices) {
+        defines += [ "WEBRTC_SPEECH_DEVICES" ]
+      }
+
       cflags = [ "-g", "-O0" ]
       include_dirs += [ "../third_party/boringssl/src/include" ]
       if (rtc_use_speech_audio_devices) {
         defines += [ "WEBRTC_SPEECH_DEVICES" ]
-        # Note: espeak-ng might not be suitable for iOS, consider removing/replacing
-        include_dirs += [ "../modules/third_party/espeak-ng/src/include" ]
       }
 
       deps = [
@@ -1178,16 +1179,14 @@ if (!build_with_chromium) {
     cflags = [ "-g", "-O0" ]
     include_dirs += [ "../third_party/boringssl/src/include" ]
 
-    if (rtc_use_speech_audio_devices) {
-      defines += [ "WEBRTC_SPEECH_DEVICES" ]
-      # Note: espeak-ng might not be suitable for iOS, consider removing/replacing
-      include_dirs += [ "../modules/third_party/espeak-ng/src/include" ]
-    }
 
     if (is_ios) {
       # Link against the framework on iOS
       # Ensure dependency on both the framework and the correct header processing action
       deps = [ ":direct_framework", ":create_bracket_include_headers_direct_framework" ]
+      if (rtc_use_speech_audio_devices) {
+        configs       += [ "//sdk:whillats_framework_config" ]
+      }       
       # Add the framework itself and the main WebRTC framework to link
       if (!defined(framework_dirs)) { framework_dirs = [] } # Ensure list exists
       framework_dirs += [ root_out_dir ]                    # Add path to built framework

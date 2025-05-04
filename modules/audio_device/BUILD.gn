@@ -400,7 +400,7 @@ rtc_library("audio_device_impl") {
 
   if (!build_with_chromium) {
     deps += [ ":file_audio_device" ]
-    if (rtc_include_internal_audio_device && rtc_use_speech_audio_devices) {
+    if (rtc_use_speech_audio_devices) {
       deps += [ ":speech_audio_device" ]
     }
     # TODO(titovartem): remove after downstream is fixed

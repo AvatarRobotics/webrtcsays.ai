@@ -549,6 +549,7 @@ if (is_ios || is_mac) {
         ":base_objc",
         ":mediasource_objc",
         ":native_video",
+        "//sdk/objc/native/src:native_src_objc",
         ":videoframebuffer_objc",
         "../api:libjingle_peerconnection_api",
         "../api:media_stream_interface",
@@ -1755,6 +1756,9 @@ if (is_ios || is_mac) {
         "..:common_objc",
         ":used_from_extension",
       ]
+      if (rtc_use_speech_audio_devices) {
+        configs += [ ":whillats_framework_config" ]
+      }
 
       if (is_ios && rtc_apprtcmobile_broadcast_extension) {
         defines = [ "RTC_APPRTCMOBILE_BROADCAST_EXTENSION" ]
