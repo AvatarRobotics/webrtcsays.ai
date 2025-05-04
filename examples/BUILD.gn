@@ -348,6 +348,7 @@ if (is_ios || (is_mac && target_cpu != "x86")) {
         "../sdk:peerconnectionfactory_base_objc",
         "../sdk:videocapture_objc",
         "../sdk:videocodec_objc",
+        "../sdk:videosource_objc",
       ]
       if (rtc_ios_use_opengl_rendering) {
         deps += [ "../sdk:opengl_ui_objc" ]
@@ -370,6 +371,7 @@ if (is_ios || (is_mac && target_cpu != "x86")) {
         ":AppRTCMobile_lib",
         "../sdk:framework_objc",
         "../sdk:ios_framework_bundle",
+        "../sdk:videosource_objc",
       ]
 
       if (rtc_apprtcmobile_broadcast_extension) {
@@ -381,6 +383,27 @@ if (is_ios || (is_mac && target_cpu != "x86")) {
 
       if (target_cpu == "x86") {
         deps += [ "//testing/iossim" ]
+      }
+
+      # Conditionally link Whillats and its dependencies
+      if (rtc_use_speech_audio_devices) {
+        configs += [ "//sdk:whillats_framework_config" ]
+
+        # Conditionally link whisper and llama
+        _whisper_framework_dir = rebase_path("//modules/third_party/whillats/third_party/whisper.cpp/build-apple/whisper.xcframework/ios-arm64", root_build_dir)
+        _llama_framework_dir = rebase_path("//modules/third_party/whillats/third_party/llama.cpp/build-apple/llama.xcframework/ios-arm64", root_build_dir)
+
+        if (!defined(ldflags)) { ldflags = [] }
+        if (!defined(frameworks)) { frameworks = [] }
+
+        ldflags += [
+          "-F" + _whisper_framework_dir,
+          "-F" + _llama_framework_dir,
+        ]
+        frameworks += [
+          "whisper.framework",
+          "llama.framework",
+        ]
       }
     }
 
@@ -412,8 +435,9 @@ if (is_ios || (is_mac && target_cpu != "x86")) {
 
         deps = [
           ":apprtc_signaling",
-          "../sdk:framework_objc+link",
+          "../sdk:framework_objc",
           "../sdk:ios_framework_bundle",
+          "../sdk:videosource_objc",
         ]
 
         frameworks = [ "ReplayKit.framework" ]
@@ -429,6 +453,7 @@ if (is_ios || (is_mac && target_cpu != "x86")) {
         deps = [
           ":AppRTCMobileBroadcastUpload_lib",
           "../sdk:framework_objc",
+          "../sdk:videosource_objc",
         ]
       }
 
@@ -522,6 +547,8 @@ if (is_ios || (is_mac && target_cpu != "x86")) {
       public_configs = [ "..:common_inherited_config" ]
 
       deps = [ ":ObjCNativeAPIDemo_lib" ]
+      # Link WebRTC framework
+      deps += [ "../sdk:framework_objc", "../sdk:ios_framework_bundle", "../sdk:videosource_objc" ]
 
       if (target_cpu == "x86") {
         deps += [ "//testing/iossim" ]
@@ -548,6 +575,7 @@ if (is_ios || (is_mac && target_cpu != "x86")) {
         "../sdk:metal_objc",
         "../sdk:mac_framework_objc",
         "../sdk:mac_framework_bundle",
+        "../sdk:videosource_objc",
       ]
     }
 
@@ -572,6 +600,7 @@ if (is_ios || (is_mac && target_cpu != "x86")) {
         ":AppRTCMobile_lib",
         "../sdk:mac_framework_bundle",
         "../sdk:mac_framework_objc+link",
+        "../sdk:videosource_objc",
       ]
     }
   }
@@ -937,10 +966,10 @@ if (!build_with_chromium) {
 
       cflags = [ "-g", "-O0" ]
       include_dirs += [ "../third_party/boringssl/src/include" ]
-      if (rtc_use_speech_audio_devices) {
-        defines += [ "WEBRTC_SPEECH_DEVICES" ]
-        include_dirs += [ "../modules/third_party/espeak-ng/src/include" ]
-      }
+      #if (rtc_use_speech_audio_devices) {
+      #  defines += [ "WEBRTC_SPEECH_DEVICES" ]
+      #  include_dirs += [ "../modules/third_party/espeak-ng/src/include" ]
+      #}
 
       deps = [
         ":create_bracket_include_headers_direct_framework",
@@ -986,7 +1015,8 @@ if (!build_with_chromium) {
         "//system_wrappers:field_trial",
         "//third_party/abseil-cpp/absl/memory",
         "//third_party/jsoncpp:jsoncpp",
-        "//pc:pc_test_utils"
+        "//pc:pc_test_utils",
+        "//third_party/abseil-cpp/absl/types:optional",
       ]
 
       frameworks = [
@@ -999,21 +1029,28 @@ if (!build_with_chromium) {
         "VideoToolbox.framework",
       ]
 
+      # Conditionally add the whillats config for direct_framework
       if (rtc_use_speech_audio_devices) {
-        framework_dirs = [
-          rebase_path("//src/modules/third_party/whillats/build-ios/lib/Release", root_build_dir),
-          rebase_path("//src/modules/third_party/whillats/third_party/whisper.cpp/build-apple/whisper.xcframework/ios-arm64", root_build_dir),
-          rebase_path("//src/modules/third_party/whillats/third_party/llama.cpp/build-apple/llama.xcframework/ios-arm64", root_build_dir),
+        configs += [ "//sdk:whillats_framework_config" ]
+      }
+
+      # Conditionally link whisper and llama
+      if (rtc_use_speech_audio_devices) {
+        _whisper_framework_dir = rebase_path("//modules/third_party/whillats/third_party/whisper.cpp/build-apple/whisper.xcframework/ios-arm64", root_build_dir)
+        _llama_framework_dir = rebase_path("//modules/third_party/whillats/third_party/llama.cpp/build-apple/llama.xcframework/ios-arm64", root_build_dir)
+
+        if (!defined(ldflags)) { ldflags = [] }
+        if (!defined(frameworks)) { frameworks = [] }
+
+        ldflags += [
+          "-F" + _whisper_framework_dir,
+          "-F" + _llama_framework_dir,
         ]
         frameworks += [
-          "whillats.framework",
           "whisper.framework",
           "llama.framework",
         ]
       }
-
-      if (!defined(ldflags)) { ldflags = [] }
-      configs += []
     }
 
   } else {

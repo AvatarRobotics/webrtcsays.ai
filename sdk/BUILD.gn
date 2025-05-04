@@ -1425,6 +1425,11 @@ if (is_ios || is_mac) {
           ":used_from_extension",
         ]
 
+        # Conditionally add Whillats config to the CORE framework
+        if (rtc_use_speech_audio_devices) {
+          configs += [ ":whillats_framework_config" ]
+        }
+
         public_configs = [ ":common_config_objc" ]
       }
 
@@ -1631,13 +1636,15 @@ if (is_ios || is_mac) {
         "../api/video:video_rtp_headers",
         "../api/video_codecs:video_codecs_api",
         "../common_video",
-        "../pc:video_track_source_proxy",
-        "../rtc_base:buffer",
+        "../media:adapted_video_track_source",
+        "../media:codec",
+        "../media:rtc_audio_video",
+        "../media:rtc_media_base",
+        "../modules/video_coding:video_codec_interface",
+        "../rtc_base:checks",
         "../rtc_base:logging",
-        "../rtc_base:ssl",
-        "../rtc_base:ssl_adapter",
-        "../rtc_base:threading",
-        "//third_party/abseil-cpp/absl/memory",
+        "../rtc_base:timestamp_aligner",
+        "../rtc_base:timeutils",
       ]
       if (is_ios) {
         deps += [ ":native_network_monitor" ]
@@ -1700,8 +1707,6 @@ if (is_ios || is_mac) {
         "../api/video:video_rtp_headers",
         "../api/video_codecs:video_codecs_api",
         "../common_video",
-        "../media:adapted_video_track_source",
-        "../media:codec",
         "../media:rtc_audio_video",
         "../media:rtc_media_base",
         "../modules/video_coding:video_codec_interface",
@@ -1779,5 +1784,17 @@ if (is_ios || is_mac) {
         "VideoToolbox.framework",
       ]
     }
+  }
+}
+
+# Conditionally define the config for Whillats framework linking
+if (rtc_use_speech_audio_devices) {
+  config("whillats_framework_config") {
+    visibility = [ "*" ]
+    _whillats_framework_dir = rebase_path("//modules/third_party/whillats/build-ios/lib/Release", root_build_dir)
+    ldflags = [
+      "-F" + _whillats_framework_dir,
+    ]
+    frameworks = [ "whillats.framework" ]
   }
 }

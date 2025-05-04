@@ -400,7 +400,7 @@ rtc_library("audio_device_impl") {
 
   if (!build_with_chromium) {
     deps += [ ":file_audio_device" ]
-    if(rtc_include_internal_audio_device) {
+    if (rtc_include_internal_audio_device && rtc_use_speech_audio_devices) {
       deps += [ ":speech_audio_device" ]
     }
     # TODO(titovartem): remove after downstream is fixed
@@ -507,7 +507,8 @@ if (rtc_include_tests && !build_with_chromium) {
   }
 }
 
-if (!build_with_chromium) {
+# Wrap the entire speech_audio_device target definition
+if (rtc_use_speech_audio_devices) {
   rtc_library("speech_audio_device") {
     visibility = [ "*" ]
     cflags = []
@@ -521,46 +522,14 @@ if (!build_with_chromium) {
       "speech/whisper_audio_device.cc",
       "speech/whisper_audio_device.h",
     ]
-    if (rtc_use_speech_audio_devices) {
-      defines += [ "WEBRTC_SPEECH_DEVICES" ]
-    }
+
     include_dirs = [
       "//modules/third_party/whillats/src",
     ]
-    if (is_ios) {
-      # Add include path for whillats public headers
-      include_dirs += [
-        "//modules/third_party/whillats/src",
-      ]
-      # DO NOT compile whillats sources directly here
-      # sources += [
-      #   "//modules/third_party/whillats/src/whillats.h",
-      #   "//modules/third_party/whillats/src/whillats.cc",
-      #   "//modules/third_party/whillats/src/whisper_transcription.h",
-      #   "//modules/third_party/whillats/src/whisper_transcription.cc",
-      #   "//modules/third_party/whillats/src/llama_device_base.h",
-      #   "//modules/third_party/whillats/src/llama_device_base.cc",
-      # ]
 
-      # Add paths containing the frameworks needed
-      framework_dirs = [
-        "//modules/third_party/whillats/build-ios/lib/Release", # Path to whillats.framework
-        # Assuming whisper & llama are linked within whillats.framework via CMake
-      ]
-      # Add the framework names
-      frameworks = [
-        "whillats.framework", # Link the framework built by CMake
-        # System Frameworks needed by whillats or its deps (confirm which are needed)
-        "Foundation.framework",
-        "Accelerate.framework",
-        "Metal.framework",
-        "MetalKit.framework",
-        "AudioToolbox.framework", # Likely needed for espeak/audio output
-      ]
-    }
     cflags += [ "-std=c++11", "-Wno-incompatible-pointer-types-discards-qualifiers" ] 
     cflags_cc += [ "-Wno-exit-time-destructors", "-Wno-global-constructors" ]
-    ldflags += [ "-fopenmp" ]
+
     deps = [
       ":audio_device_generic",
       "../../rtc_base:checks",
