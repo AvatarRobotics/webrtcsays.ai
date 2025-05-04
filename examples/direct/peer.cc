@@ -81,7 +81,7 @@ void DirectPeer::Start() {
 
         auto audio_source = peer_connection_factory_->CreateAudioSource(audio_options);
         RTC_DCHECK(audio_source.get());
-        audio_track_ = peer_connection_factory_->CreateAudioTrack("audio_track", audio_source.get());
+        audio_track_ = peer_connection_factory_->CreateAudioTrack(std::string("audio_track"), audio_source.get());
         RTC_DCHECK(audio_track_.get());
 
         webrtc::RtpTransceiverInit ainit;
@@ -103,7 +103,7 @@ void DirectPeer::Start() {
             }
 
             video_track_ = peer_connection_factory_->CreateVideoTrack(video_source_, 
-                "video_track");
+                std::string("video_track"));
             RTC_DCHECK(video_track_.get());
 
             webrtc::RtpTransceiverInit vinit;
@@ -131,14 +131,14 @@ void DirectPeer::Start() {
                     [this, sdp](webrtc::RTCError error) {
                         if (!error.ok()) {
                             RTC_LOG(LS_ERROR) << "Failed to set local description: " 
-                                            << error.message();
+                                              << error.message();
                             signaling_thread()->PostTask([this]() {
-                                SendMessage("BYE");
+                                SendMessage(std::string("BYE"));
                             });
                             return;
                         }
                         RTC_LOG(LS_INFO) << "Local description set successfully";
-                        SendMessage("OFFER:" + sdp);
+                        SendMessage(std::string("OFFER:") + sdp);
                     });
 
                 peer_connection_->SetLocalDescription(std::move(desc), set_local_description_observer_);
@@ -276,7 +276,40 @@ void DirectPeer::SetRemoteDescription(const std::string& sdp) {
                     peer_connection()->signaling_state() == 
                         webrtc::PeerConnectionInterface::kHaveRemoteOffer) {
                     RTC_LOG(LS_INFO) << "Creating answer as callee...";
-                                                            
+
+                    // Add local audio track for callee
+                    cricket::AudioOptions audio_options;
+                    auto audio_source = peer_connection_factory_->CreateAudioSource(audio_options);
+                    RTC_DCHECK(audio_source.get());
+                    audio_track_ = peer_connection_factory_->CreateAudioTrack(std::string("audio_track"), audio_source.get());
+                    RTC_DCHECK(audio_track_.get());
+                    webrtc::RtpTransceiverInit ainit;
+                    ainit.direction = webrtc::RtpTransceiverDirection::kSendRecv;
+                    auto at_result = peer_connection()->AddTransceiver(audio_track_, ainit);
+                    RTC_DCHECK(at_result.ok());
+                    auto atransceiver = at_result.value();
+                    auto adirection_result = atransceiver->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendRecv);
+                    RTC_LOG(LS_INFO) << "Initial audio transceiver direction set for callee, result: " \
+                                     << (adirection_result.ok() ? "success" : "failed");
+
+                    // Add local video track for callee
+                    if (opts_.video) {
+                        if (!video_source_) {
+                            RTC_LOG(LS_ERROR) << "Video source not set for callee, adding fake video source";
+                            video_source_ = rtc::make_ref_counted<webrtc::FakePeriodicVideoTrackSource>(1000);
+                        }
+                        video_track_ = peer_connection_factory_->CreateVideoTrack(video_source_, std::string("video_track"));
+                        RTC_DCHECK(video_track_.get());
+                        webrtc::RtpTransceiverInit vinit;
+                        vinit.direction = webrtc::RtpTransceiverDirection::kSendRecv;
+                        auto vt_result = peer_connection()->AddTransceiver(video_track_, vinit);
+                        RTC_DCHECK(vt_result.ok());
+                        auto vtransceiver = vt_result.value();
+                        auto vdirection_result = vtransceiver->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendRecv);
+                        RTC_LOG(LS_INFO) << "Initial video transceiver direction set for callee, result: " \
+                                         << (vdirection_result.ok() ? "success" : "failed");
+                    }
+
                     create_session_observer_ = rtc::make_ref_counted<LambdaCreateSessionDescriptionObserver>(
                         [this](std::unique_ptr<webrtc::SessionDescriptionInterface> desc) {
                             std::string sdp;
@@ -288,12 +321,12 @@ void DirectPeer::SetRemoteDescription(const std::string& sdp) {
                                         RTC_LOG(LS_ERROR) << "Failed to set local description: " 
                                                         << error.message();
                                         signaling_thread()->PostTask([this]() {
-                                            SendMessage("BYE");
+                                            SendMessage(std::string("BYE"));
                                         });
                                         return;
                                     }
                                     RTC_LOG(LS_INFO) << "Local description set successfully";
-                                    SendMessage("ANSWER:" + sdp);
+                                    SendMessage(std::string("ANSWER:") + sdp);
                             });
 
                             peer_connection_->SetLocalDescription(std::move(desc), set_local_description_observer_);

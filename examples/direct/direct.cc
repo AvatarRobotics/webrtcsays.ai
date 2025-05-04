@@ -16,8 +16,16 @@
 #include <vector>
 #include <string>
 #include "rtc_base/time_utils.h"
-#include "api/video_codecs/video_encoder_factory_template_libvpx_vp8_adapter.h"
+#include "api/video_codecs/video_decoder_factory_template.h"
+#include "api/video_codecs/video_decoder_factory_template_dav1d_adapter.h"
 #include "api/video_codecs/video_decoder_factory_template_libvpx_vp8_adapter.h"
+#include "api/video_codecs/video_decoder_factory_template_libvpx_vp9_adapter.h"
+#include "api/video_codecs/video_decoder_factory_template_open_h264_adapter.h"
+#include "api/video_codecs/video_encoder_factory_template.h"
+#include "api/video_codecs/video_encoder_factory_template_libaom_av1_adapter.h"
+#include "api/video_codecs/video_encoder_factory_template_libvpx_vp8_adapter.h"
+#include "api/video_codecs/video_encoder_factory_template_libvpx_vp9_adapter.h"
+#include "api/video_codecs/video_encoder_factory_template_open_h264_adapter.h"
 
 #include "direct.h"
 #include "option.h"
@@ -341,10 +349,16 @@ bool DirectApplication::CreatePeerConnection() {
       webrtc::CreateBuiltinAudioEncoderFactory(),
       webrtc::CreateBuiltinAudioDecoderFactory(),
       // Pass nullptr for video factories to use internal defaults
-      opts_.video ? \
-      std::make_unique<webrtc::VideoEncoderFactoryTemplate<webrtc::OpenH264EncoderTemplateAdapter>>() : nullptr,
-      opts_.video ? \
-      std::make_unique<webrtc::VideoDecoderFactoryTemplate<webrtc::OpenH264DecoderTemplateAdapter>>(): nullptr, // video_encoder_factory
+      opts_.video ? std::make_unique<webrtc::VideoEncoderFactoryTemplate<
+          webrtc::LibvpxVp8EncoderTemplateAdapter,
+          webrtc::LibvpxVp9EncoderTemplateAdapter,
+          webrtc::OpenH264EncoderTemplateAdapter,
+          webrtc::LibaomAv1EncoderTemplateAdapter>>() : nullptr,
+      opts_.video ? std::make_unique<webrtc::VideoDecoderFactoryTemplate<
+          webrtc::LibvpxVp8DecoderTemplateAdapter,
+          webrtc::LibvpxVp9DecoderTemplateAdapter,
+          webrtc::OpenH264DecoderTemplateAdapter,
+          webrtc::Dav1dDecoderTemplateAdapter>>() : nullptr,      
       nullptr, // audio_mixer
       nullptr  // audio_processing
   );

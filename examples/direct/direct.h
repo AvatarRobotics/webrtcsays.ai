@@ -153,14 +153,14 @@ class LambdaSetRemoteDescriptionObserver
 class ConsoleVideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
  public:
   void OnFrame(const webrtc::VideoFrame& frame) override {
-    if(!received_frame_) {
+    //if(!received_frame_) {
     rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer(
         frame.video_frame_buffer());
       RTC_LOG(LS_INFO) << "Received video frame (" << buffer->type() << ") " << frame.width() << "x"
                        << frame.height() << " timestamp=" << frame.timestamp_us();
       // For simplicity, we just log. Actual rendering is complex in console.
       received_frame_ = true;
-    }
+    //}
   }
 
  private:
