@@ -37,12 +37,16 @@ class SpeechAudioDeviceFactory {
   static void SetLlamaModelFilename(absl::string_view llama_model_filename);
   static void SetLlavaMMProjFilename(absl::string_view llava_mmproj_filename);
   static void SetWavFilename(absl::string_view wav_filename);
-  static void SetYuvFilename(absl::string_view yuv_filename);
+  static void SetYuvFilename(absl::string_view yuv_filename, int width, int height);
   static const std::string& GetWhisperModelFilename() { return _whisperModelFilename; }
   static const std::string& GetLlamaModelFilename() { return _llamaModelFilename; }
   static const std::string& GetLlavaMMProjFilename() { return _llavaMMProjFilename; }
   static const std::string& GetWavFilename() { return _wavFilename; }
   static const std::string& GetYuvFilename() { return _yuvFilename; }
+  static const YUVData& GetYuvData() { return _yuvData; }
+
+  static void SetWhisperEnabled(bool enabled) { _whisperEnabled = enabled; }
+  static void SetLlamaEnabled(bool enabled) { _llamaEnabled = enabled; }
 
   static WhillatsTTS* tts() { return _ttsDevice.get(); }
   static WhillatsTranscriber* whisper() { return _whisperDevice.get(); }
@@ -50,6 +54,8 @@ class SpeechAudioDeviceFactory {
 
   friend class WhisperAudioDevice;
  private:
+  static TaskQueueFactory* _taskQueueFactory;
+
   static WhillatsTTS* CreateWhillatsTTS(
     WhillatsSetAudioCallback &ttsCallback);
   static WhillatsTranscriber* CreateWhillatsTranscriber(
@@ -70,9 +76,11 @@ class SpeechAudioDeviceFactory {
   static std::string _wavFilename;
   // This is a yuv file, to send to llama-llava
   static std::string _yuvFilename;
+  // This is a static yuv data, to send to llama-llava
+  static YUVData _yuvData;
   
-  // This is a task queue factory, to create task queues for the audio device
-  static TaskQueueFactory* _taskQueueFactory;
+  static bool _whisperEnabled;
+  static bool _llamaEnabled;
 
   // This is a whisper device, to send to whisper
   static std::unique_ptr<WhillatsTranscriber> _whisperDevice;

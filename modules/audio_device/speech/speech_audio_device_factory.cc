@@ -13,7 +13,6 @@
 
 #include <stdio.h>
 #include <cstdlib>
-#include <mutex>
 
 #include "absl/strings/string_view.h"
 #include "rtc_base/logging.h"
@@ -21,8 +20,11 @@
 
 #include "modules/audio_device/speech/speech_audio_device_factory.h"
 #include "modules/audio_device/speech/whisper_audio_device.h"
+#include "modules/third_party/whillats/src/whillats_utils.h"
 
 namespace webrtc {
+
+TaskQueueFactory* SpeechAudioDeviceFactory::_taskQueueFactory;
 
 std::unique_ptr<WhillatsTranscriber> SpeechAudioDeviceFactory::_whisperDevice;
 std::unique_ptr<WhillatsLlama> SpeechAudioDeviceFactory::_llamaDevice;
@@ -33,23 +35,40 @@ std::string SpeechAudioDeviceFactory::_llamaModelFilename;
 std::string SpeechAudioDeviceFactory::_llavaMMProjFilename;
 std::string SpeechAudioDeviceFactory::_wavFilename;
 std::string SpeechAudioDeviceFactory::_yuvFilename;
+YUVData SpeechAudioDeviceFactory::_yuvData;
+bool SpeechAudioDeviceFactory::_whisperEnabled = false;
+bool SpeechAudioDeviceFactory::_llamaEnabled = false;
 
-TaskQueueFactory* SpeechAudioDeviceFactory::_taskQueueFactory;
 
 WhillatsTTS* SpeechAudioDeviceFactory::CreateWhillatsTTS(WhillatsSetAudioCallback &ttsCallback) {
+  if(_ttsDevice)
+    return _ttsDevice.get();
+
   _ttsDevice = std::make_unique<WhillatsTTS>(ttsCallback);
   return _ttsDevice.get();
 }
 
 WhillatsTranscriber* SpeechAudioDeviceFactory::CreateWhillatsTranscriber
   (WhillatsSetResponseCallback &whisperCallback, WhillatsSetLanguageCallback &languageCallback) {
+  if(_whisperEnabled) {
+    if(_whisperDevice)
+      return _whisperDevice.get();
+
     _whisperDevice = std::make_unique<WhillatsTranscriber>(_whisperModelFilename.c_str(), whisperCallback, languageCallback);
-  return _whisperDevice.get();
+    return _whisperDevice.get();
+  }
+  return nullptr;
 }
 
 WhillatsLlama* SpeechAudioDeviceFactory::CreateWhillatsLlama(WhillatsSetResponseCallback &llamaCallback) {
+  if(_llamaEnabled) {
+    if(_llamaDevice)
+      return _llamaDevice.get();
+
     _llamaDevice = std::make_unique<WhillatsLlama>(_llamaModelFilename.c_str(), _llavaMMProjFilename.c_str(), llamaCallback);
-  return _llamaDevice.get();
+    return _llamaDevice.get();
+  }
+  return nullptr;
 }
 
 void SpeechAudioDeviceFactory::SetWhisperModelFilename(absl::string_view whisper_model_filename) {
@@ -68,8 +87,9 @@ void SpeechAudioDeviceFactory::SetWavFilename(absl::string_view wav_filename) {
   _wavFilename = wav_filename;
 }
 
-void SpeechAudioDeviceFactory::SetYuvFilename(absl::string_view yuv_filename) {
+void SpeechAudioDeviceFactory::SetYuvFilename(absl::string_view yuv_filename, int width, int height) {
   _yuvFilename = yuv_filename;
+  load_yuv(_yuvData, _yuvFilename.c_str(), width, height);
 }
 
 void SpeechAudioDeviceFactory::SetTaskQueueFactory(TaskQueueFactory* task_queue_factory) {
@@ -79,29 +99,6 @@ void SpeechAudioDeviceFactory::SetTaskQueueFactory(TaskQueueFactory* task_queue_
 AudioDeviceGeneric* SpeechAudioDeviceFactory::CreateSpeechAudioDevice() {
   WhisperAudioDevice* whisper_audio_device = nullptr;
   if(!whisper_audio_device) {
-
-    // if(_whisperModelFilename.empty()) {
-    //   SpeechAudioDeviceFactory::_whisperModelFilename = std::getenv("WHISPER_MODEL") ? \
-    //     std::getenv("WHISPER_MODEL") : ""; // Must be ggml
-    //   if(SpeechAudioDeviceFactory::_whisperModelFilename.empty())
-    //     RTC_LOG(LS_WARNING)
-    //       << "WHISPER_MODEL enviroment variable is empty! Did you mean it?";
-    // }
-
-    // if(_llamaModelFilename.empty()) {
-    //   SpeechAudioDeviceFactory::_llamaModelFilename = std::getenv("LLAMA_MODEL") ? \
-    //     std::getenv("LLAMA_MODEL") : ""; // Must be gguf
-    //   if(SpeechAudioDeviceFactory::_llamaModelFilename.empty())
-    //     RTC_LOG(LS_WARNING)
-    //       << "LLAMA_MODEL enviroment variable is empty! Did you mean it?";
-    // }
-
-    // SpeechAudioDeviceFactory::_wavFilename = std::getenv("WEBRTC_SPEECH_INITIAL_PLAYOUT_WAV") ? \
-    //   std::getenv("WEBRTC_SPEECH_INITIAL_PLAYOUT_WAV") : ""; // Must be .wav
-    // if(!SpeechAudioDeviceFactory::_wavFilename.empty())
-    //   RTC_LOG(LS_INFO)
-    //     << "WEBRTC_SPEECH_INITIAL_PLAYOUT_WAV is '" << SpeechAudioDeviceFactory::_wavFilename << "'";
-
     whisper_audio_device = new WhisperAudioDevice(_taskQueueFactory);
     RTC_LOG(LS_INFO) << "Initialized WhisperAudioDevice instance.";
   }

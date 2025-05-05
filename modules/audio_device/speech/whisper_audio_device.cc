@@ -10,12 +10,18 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include <string.h>
+#include <string>
 #include <cstdio>
 #include <thread>
 #include <iomanip>
 #include <filesystem>
 #include <memory>
+#include <cstring>
+#include <algorithm>  // for std::find_if
+#include <cctype>     // for std::isspace
+#include <mutex>      // for std::mutex, lock_guard
+#include <queue>      // for std::queue
+
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/thread.h"
@@ -26,9 +32,18 @@
 #include "modules/audio_device/speech/speech_audio_device_factory.h"
 #include "modules/audio_device/speech/whisper_audio_device.h"
 
+#include "absl/synchronization/mutex.h"
+
 //#define PLAY_WAV_ON_RECORD 1
 //#define PLAY_WAV_ON_PLAY 1
 #define LLAMA_ENABLED 1
+
+#ifdef __APPLE__ 
+  #define USE_CF_RUNLOOP 1
+  #if USE_CF_RUNLOOP
+    #include <CoreFoundation/CFRunLoop.h> // For CFRunLoopRunInMode
+  #endif
+#endif
 
 namespace webrtc {
 
@@ -131,7 +146,7 @@ inline void rtrim(std::string &s) {
 
 void WhisperAudioDevice::speakText(const std::string& text) {
   if(_tts_enabled) {
-    std::lock_guard<std::mutex> lock(_queueMutex);
+    absl::MutexLock lock(&_queueMutex);
     std::string s(text);
     rtrim(s);
     ltrim(s);
@@ -162,10 +177,8 @@ int32_t WhisperAudioDevice::RecordingDeviceName(uint16_t index,
   const char* kName = "whisper_recording_device";
   const char* kGuid = "358f8c4d-9605-4d23-bf0a-17d346fafc6f";
   if (index < 1) {
-    memset(name, 0, kAdmMaxDeviceNameSize);
-    memset(guid, 0, kAdmMaxGuidSize);
-    memcpy(name, kName, strlen(kName));
-    memcpy(guid, kGuid, strlen(guid));
+    rtc::strcpyn(name, kAdmMaxDeviceNameSize, kName);
+    rtc::strcpyn(guid, kAdmMaxGuidSize, kGuid);
     return 0;
   }
   return -1;
@@ -239,7 +252,10 @@ int32_t WhisperAudioDevice::StartRecording() {
   }
   #endif // defined(PLAY_WAV_ON_RECORD)
 
-  speakText(SpeechAudioDeviceFactory::GetLlamaModelFilename() + " ready to chat");
+  // Speak the llama model name
+  std::filesystem::path llama_model_path = std::filesystem::path(SpeechAudioDeviceFactory::GetLlamaModelFilename());
+  std::string llama_model_name = llama_model_path.stem().string() + " ready to chat";
+  speakText(llama_model_name);
 
   _ptrThreadRec = rtc::PlatformThread::SpawnJoinable(
       [this] {
@@ -281,7 +297,7 @@ int32_t WhisperAudioDevice::StopRecording() {
 }
 
 void WhisperAudioDevice::SetTTSBuffer(const uint16_t* buffer, size_t buffer_size) {
-  std::lock_guard<std::mutex> lock(_queueMutex);
+  absl::MutexLock lock(&_queueMutex);
   if (!_ttsBuffer.empty() && _ttsIndex < _ttsBuffer.size()) {
     RTC_LOG(LS_VERBOSE) << "TTS buffer still playing, delaying new buffer";
     return; // Wait until current buffer is done
@@ -312,14 +328,18 @@ bool WhisperAudioDevice::RecThreadProcess() {
         size_t samplesToCopy = std::min(_recordingFramesIn10MS, remainingSamples);
 
         if (samplesToCopy > 0 && _recordingBuffer != nullptr) {
-          memcpy(_recordingBuffer, &_ttsBuffer[_ttsIndex], samplesToCopy * sizeof(short));
+          // Copy TTS samples into recording buffer (as bytes)
+          const int8_t* src = reinterpret_cast<const int8_t*>(&_ttsBuffer[_ttsIndex]);
+          const int8_t* end = src + samplesToCopy * sizeof(short);
+          std::copy(src, end, _recordingBuffer);
           _ttsIndex += samplesToCopy;
 
-          // Fill remaining buffer with silence if needed
-          if (samplesToCopy < _recordingFramesIn10MS) {
-            memset(_recordingBuffer + samplesToCopy * sizeof(short), 0,
-                   (_recordingFramesIn10MS - samplesToCopy) * sizeof(short));
-          }
+          // Fill any leftover with silence
+          std::fill_n(
+            _recordingBuffer + samplesToCopy * sizeof(short),
+            (_recordingFramesIn10MS - samplesToCopy) * sizeof(short),
+            int8_t(0)
+          );
 
           mutex_.Unlock();
           _ptrAudioBuffer->SetRecordedBuffer(_recordingBuffer, _recordingFramesIn10MS);
@@ -332,7 +352,7 @@ bool WhisperAudioDevice::RecThreadProcess() {
       bool shouldSynthesize = false;
       std::string textToSpeak;
       if (_tts_enabled) {
-        std::unique_lock<std::mutex> lock(_queueMutex);
+        absl::MutexLock lock(&_queueMutex);
         if (!_textQueue.empty()) {
           textToSpeak = _textQueue.front();
           _textQueue.pop();
@@ -345,15 +365,26 @@ bool WhisperAudioDevice::RecThreadProcess() {
         RTC_LOG(LS_INFO) << "Queueing TTS text: " << textToSpeak;
         SpeechAudioDeviceFactory::tts()->queueText(textToSpeak.c_str(), 
           SpeechAudioDeviceFactory::whisper()->getLanguage().c_str());
-      } else {
-        // Send silence if no audio or text is available
-        if (_recordingBuffer != nullptr) {
-          memset(_recordingBuffer, 0, _recordingFramesIn10MS * sizeof(short));
-          mutex_.Unlock();
-          _ptrAudioBuffer->SetRecordedBuffer(_recordingBuffer, _recordingFramesIn10MS);
-          _ptrAudioBuffer->DeliverRecordedData();
-          mutex_.Lock();
+#if USE_CF_RUNLOOP
+        // Pump the CFRunLoop until we get the first TTS buffer, up to 200ms
+        CFTimeInterval remainingPump = 0.2;
+        while (_ttsBuffer.empty() && remainingPump > 0) {
+          CFTimeInterval chunk = std::min(remainingPump, (CFTimeInterval)0.05);
+          CFRunLoopRunInMode(kCFRunLoopDefaultMode, chunk, /*returnAfterSourceHandled=*/true);
+          remainingPump -= chunk;
         }
+#endif
+      } else {
+        // Send silence for a full 10ms frame
+        std::fill_n(
+          _recordingBuffer,
+          _recordingFramesIn10MS * sizeof(short),
+          int8_t(0)
+        );
+        mutex_.Unlock();
+        _ptrAudioBuffer->SetRecordedBuffer(_recordingBuffer, _recordingFramesIn10MS);
+        _ptrAudioBuffer->DeliverRecordedData();
+        mutex_.Lock();
       }
     }
 
@@ -362,13 +393,23 @@ bool WhisperAudioDevice::RecThreadProcess() {
     // Pacing for the next 10ms chunk
     int64_t sleepTime = 10 - (rtc::TimeMillis() - currentTime);
     if (sleepTime > 0) {
+#if USE_CF_RUNLOOP
+      // CFTimeInterval is in seconds, so divide ms by 1000.0
+      CFTimeInterval waitSecs = sleepTime / 1000.0;
+      CFRunLoopRunInMode(kCFRunLoopDefaultMode, waitSecs, /*returnAfterSourceHandled=*/true);
+#else
       mutex_.Unlock();
       SleepMs(sleepTime);
       mutex_.Lock();
+#endif
     }
   }
 
   mutex_.Unlock();
+#if USE_CF_RUNLOOP
+  // Ensure runloop processes any final callbacks
+  CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.001, /*returnAfterSourceHandled=*/true);
+#endif
   return true;
 }
 
@@ -396,10 +437,8 @@ int32_t WhisperAudioDevice::PlayoutDeviceName(uint16_t index,
   const char* kName = "whisper_playout_device";
   const char* kGuid = "951ba178-fbd1-47d1-96be-965b17d56d5b";
   if (index < 1) {
-    memset(name, 0, kAdmMaxDeviceNameSize);
-    memset(guid, 0, kAdmMaxGuidSize);
-    memcpy(name, kName, strlen(kName));
-    memcpy(guid, kGuid, strlen(guid));
+    rtc::strcpyn(name, kAdmMaxDeviceNameSize, kName);
+    rtc::strcpyn(guid, kAdmMaxGuidSize, kGuid);
     return 0;
   }
   return -1;

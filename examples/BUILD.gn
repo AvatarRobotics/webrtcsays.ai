@@ -1082,9 +1082,6 @@ if (!build_with_chromium) {
 
       cflags = [ "-g", "-O0" ]
       include_dirs += [ "../third_party/boringssl/src/include" ]
-      if (rtc_use_speech_audio_devices) {
-        defines += [ "WEBRTC_SPEECH_DEVICES" ]
-      }
 
       deps = [
         #"//sdk/dylib:webrtc_dylib",

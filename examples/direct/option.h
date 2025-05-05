@@ -55,6 +55,13 @@
     #define DIRECT_API DIRECT_IMPORT
 #endif
 
+#ifdef __APPLE__ 
+  #define USE_CF_RUNLOOP 1
+  #if USE_CF_RUNLOOP
+    #include <CoreFoundation/CFRunLoop.h> // For CFRunLoopRunInMode
+  #endif
+#endif
+
 enum LoggingSeverity {
   LS_VERBOSE,
   LS_INFO,
@@ -82,6 +89,8 @@ struct Options {
     std::string webrtc_key_path = "key.pem";
     std::string webrtc_speech_initial_playout_wav = "play.wav";
     std::string llama_llava_yuv = "test.yuv";
+    int llama_llava_yuv_width = 300;
+    int llama_llava_yuv_height = 300;
     std::string address = "";
     std::string turns = "";
     std::string vpn = "";

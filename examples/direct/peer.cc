@@ -23,12 +23,11 @@
 #include "modules/video_capture/video_capture_factory.h"
 #include "pc/video_track_source.h"
 #include "rtc_base/ref_counted_object.h"
-#include "pc/test/fake_periodic_video_source.h"
-#include "pc/test/fake_periodic_video_track_source.h"
 #include "api/video/video_frame.h"
 #include "rtc_base/logging.h"
 
 #include "direct.h"
+#include "video.h"
 
 DirectPeer::DirectPeer(
     Options opts) 
@@ -81,8 +80,8 @@ void DirectPeer::Start() {
 
         auto audio_source = peer_connection_factory_->CreateAudioSource(audio_options);
         RTC_DCHECK(audio_source.get());
-        audio_track_ = peer_connection_factory_->CreateAudioTrack(std::string("audio_track"), audio_source.get());
-        RTC_DCHECK(audio_track_.get());
+        audio_track_ = peer_connection_factory_->CreateAudioTrack("audio_track", audio_source.get());
+        RTC_DCHECK(audio_track_);
 
         webrtc::RtpTransceiverInit ainit;
         ainit.direction = webrtc::RtpTransceiverDirection::kSendRecv;
@@ -96,15 +95,21 @@ void DirectPeer::Start() {
             << ", result:" << (adirection_result.ok() ? "success" : "failed");
     
         // if video_source_ is not nullptr, create a video track
-        if(opts_.video) {
-            if(!video_source_) {
-                RTC_LOG(LS_ERROR) << "Video source not set, adding fake video source";
-                video_source_ = rtc::make_ref_counted<webrtc::FakePeriodicVideoTrackSource>(1000); 
+        if (opts_.video) {
+            if (!video_source_) {
+                // Create a static periodic video source (local fake source)
+                auto static_source = rtc::make_ref_counted<webrtc::StaticPeriodicVideoTrackSource>(false);
+                if (!opts_.llama_llava_yuv.empty()) {
+                    // Load custom YUV data if available
+                    static_source->static_periodic_source().LoadYuvData(
+                        webrtc::SpeechAudioDeviceFactory::GetYuvData());
+                }
+                video_source_ = static_source;
+                RTC_LOG(LS_INFO) << "Created StaticPeriodicVideoTrackSource";
             }
 
-            video_track_ = peer_connection_factory_->CreateVideoTrack(video_source_, 
-                std::string("video_track"));
-            RTC_DCHECK(video_track_.get());
+            video_track_ = peer_connection_factory_->CreateVideoTrack(video_source_, "video_track");
+            RTC_DCHECK(video_track_);
 
             webrtc::RtpTransceiverInit vinit;
             vinit.direction = webrtc::RtpTransceiverDirection::kSendRecv;
@@ -295,9 +300,17 @@ void DirectPeer::SetRemoteDescription(const std::string& sdp) {
                     // Add local video track for callee
                     if (opts_.video) {
                         if (!video_source_) {
-                            RTC_LOG(LS_ERROR) << "Video source not set for callee, adding fake video source";
-                            video_source_ = rtc::make_ref_counted<webrtc::FakePeriodicVideoTrackSource>(1000);
+                            // Create a static periodic video source (local fake source)
+                            auto static_source = rtc::make_ref_counted<webrtc::StaticPeriodicVideoTrackSource>(false);
+                            // Load custom YUV data if available
+                            if (!opts_.llama_llava_yuv.empty()) {
+                                static_source->static_periodic_source().LoadYuvData(
+                                    webrtc::SpeechAudioDeviceFactory::GetYuvData());
+                            }
+                            video_source_ = static_source;
+                            RTC_LOG(LS_INFO) << "Created StaticPeriodicVideoTrackSource";
                         }
+
                         video_track_ = peer_connection_factory_->CreateVideoTrack(video_source_, std::string("video_track"));
                         RTC_DCHECK(video_track_.get());
                         webrtc::RtpTransceiverInit vinit;

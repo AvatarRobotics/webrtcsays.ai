@@ -30,6 +30,43 @@
 #include "direct.h"
 #include "option.h"
 
+void ConsoleVideoRenderer::OnFrame(const webrtc::VideoFrame& frame) {
+  if (!received_frame_) {
+    rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer(
+        frame.video_frame_buffer());
+    RTC_LOG(LS_INFO) << "Received video frame (" << buffer->type() << ") "
+                      << frame.width() << "x" << frame.height()
+                      << " timestamp=" << frame.timestamp_us();
+
+    // Convert the frame to I420 format and populate YUVData
+    rtc::scoped_refptr<webrtc::I420BufferInterface> i420_buffer = buffer->ToI420();
+    if (i420_buffer) {
+      int width = i420_buffer->width();
+      int height = i420_buffer->height();
+      int stride_y = i420_buffer->StrideY();
+      int stride_u = i420_buffer->StrideU();
+      int chroma_height = i420_buffer->ChromaHeight();
+
+      size_t y_size = stride_y * height;
+      size_t uv_size = stride_u * chroma_height;
+
+      auto y_data = std::make_unique<uint8_t[]>(y_size);
+      auto u_data = std::make_unique<uint8_t[]>(uv_size);
+      auto v_data = std::make_unique<uint8_t[]>(uv_size);
+
+      memcpy(y_data.get(), i420_buffer->DataY(), y_size);
+      memcpy(u_data.get(), i420_buffer->DataU(), uv_size);
+      memcpy(v_data.get(), i420_buffer->DataV(), uv_size);
+
+      YUVData yuv{std::move(y_data), std::move(u_data), std::move(v_data),
+                  width, height, y_size, uv_size};
+      webrtc::SpeechAudioDeviceFactory::llama()->askWithImage("Describe the image in detail", yuv);
+    }
+
+    received_frame_ = true;
+  }
+}
+
 // String split from option.cc
 std::vector<std::string> stringSplit(std::string input, std::string delimiter);
 
@@ -100,12 +137,6 @@ void DirectApplication::Cleanup() {
          audio_device_module_ = nullptr; // Also release the direct member ref
      });
   }
-
-  // Remove the task that resets PC on the network thread
-  // network_thread_->PostTask([this]() {
-  //   peer_connection_ = nullptr; 
-  //   peer_connection_factory_ = nullptr;
-  // });
 
   if (rtc::Thread::Current() != main_thread_.get()) {
     main_thread_->PostTask([this]() { Cleanup(); });
@@ -237,9 +268,17 @@ void DirectApplication::RunOnBackgroundThread() {
   // Use main_thread_ instead of creating a new thread to avoid conflicts
   main_thread_->PostTask([this]() {
     while (!should_quit_) {
+#if USE_CF_RUNLOOP  
+      CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
+#endif      
       main_thread_->ProcessMessages(100); // Process messages with 100ms timeout
+
     }
     if (should_quit_) {
+#if USE_CF_RUNLOOP
+      // Ensure runloop processes any final callbacks
+      CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.001, /*returnAfterSourceHandled=*/true);
+#endif
       Cleanup();
     } else {
       Disconnect(); // Otherwise just disconnect for potential reconnection
@@ -306,11 +345,19 @@ bool DirectApplication::CreatePeerConnection() {
   webrtc::AudioDeviceModule::AudioLayer kAudioDeviceModuleType = webrtc::AudioDeviceModule::kPlatformDefaultAudio;
 #ifdef WEBRTC_SPEECH_DEVICES
   if (opts_.whisper) {
-    kAudioDeviceModuleType = webrtc::AudioDeviceModule::kSpeechAudio;
+    kAudioDeviceModuleType = webrtc::AudioDeviceModule::kSpeechAudio; 
+    webrtc::SpeechAudioDeviceFactory::SetWhisperEnabled(true);
     webrtc::SpeechAudioDeviceFactory::SetWhisperModelFilename(opts_.whisper_model);
+  }
+  if (opts_.llama) {
+    webrtc::SpeechAudioDeviceFactory::SetLlamaEnabled(true);
     webrtc::SpeechAudioDeviceFactory::SetLlamaModelFilename(opts_.llama_model);
     webrtc::SpeechAudioDeviceFactory::SetLlavaMMProjFilename(opts_.llava_mmproj);
-    webrtc::SpeechAudioDeviceFactory::SetYuvFilename(opts_.llama_llava_yuv);
+  } 
+
+  if (!opts_.llama_llava_yuv.empty()) {
+    webrtc::SpeechAudioDeviceFactory::SetYuvFilename(opts_.llama_llava_yuv, 
+      opts_.llama_llava_yuv_width, opts_.llama_llava_yuv_height);
   }
 #endif // WEBRTC_SPEECH_DEVICES
 

@@ -172,7 +172,7 @@ class WhisperAudioDevice : public SpeechAudioDevice {
   WhillatsLlama* _llama_device = nullptr;
 
   std::queue<std::string> _textQueue;
-  std::mutex _queueMutex;
+  absl::Mutex _queueMutex;
   std::condition_variable _queueCondition;
   
   std::vector<uint16_t> _ttsBuffer;  // Instance member to hold TTS audio
