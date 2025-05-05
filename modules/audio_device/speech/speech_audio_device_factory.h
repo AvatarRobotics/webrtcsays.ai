@@ -52,10 +52,6 @@ class SpeechAudioDeviceFactory {
   static WhillatsTranscriber* whisper() { return _whisperDevice.get(); }
   static WhillatsLlama* llama() { return _llamaDevice.get(); }
 
-  friend class WhisperAudioDevice;
- private:
-  static TaskQueueFactory* _taskQueueFactory;
-
   static WhillatsTTS* CreateWhillatsTTS(
     WhillatsSetAudioCallback &ttsCallback);
   static WhillatsTranscriber* CreateWhillatsTranscriber(
@@ -63,6 +59,10 @@ class SpeechAudioDeviceFactory {
     WhillatsSetLanguageCallback &languageCallback);
   static WhillatsLlama* CreateWhillatsLlama(
     WhillatsSetResponseCallback &llamaCallback);
+
+  friend class WhisperAudioDevice;
+ private:
+  static TaskQueueFactory* _taskQueueFactory;
 
   enum : uint32_t { MAX_FILENAME_LEN = 512 };
 

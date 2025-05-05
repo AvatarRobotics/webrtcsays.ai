@@ -82,15 +82,18 @@
 #include "rtc_base/virtual_socket_server.h"
 #include "rtc_base/third_party/sigslot/sigslot.h"
 #include "rtc_base/event.h"
+#include "rtc_base/system/rtc_export.h"
+
 #include "system_wrappers/include/clock.h"
 #include "system_wrappers/include/field_trial.h"
+
+#include "modules/third_party/whillats/src/whillats.h"
+
 #include "option.h"
 
 #ifdef WEBRTC_SPEECH_DEVICES
 #include "modules/audio_device/speech/speech_audio_device_factory.h"
 #endif  // WEBRTC_SPEECH_DEVICES
-
-#include "rtc_base/system/rtc_export.h"
 
 // Inject Obj-C forward declarations only:
 #ifdef __OBJC__
@@ -149,14 +152,6 @@ class LambdaSetRemoteDescriptionObserver
   std::function<void(webrtc::RTCError)> on_complete_;
 };
 
-// Simple video sink that logs frame information to the console
-class ConsoleVideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
- public:
-  void OnFrame(const webrtc::VideoFrame& frame) override;
- private:
-  bool received_frame_ = false;
-};
-
 class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
  public:
   DirectApplication(Options opts);
@@ -165,6 +160,13 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
   // Initialize threads and basic WebRTC infrastructure
   bool DIRECT_API Initialize();
   bool CreatePeerConnection();
+
+  // Common message handling
+  virtual void HandleMessage(rtc::AsyncPacketSocket* socket,
+                             const std::string& message,
+                             const rtc::SocketAddress& remote_addr);
+
+  virtual bool SendMessage(const std::string& message);
 
   // Run the application event loop
   void Run();
@@ -256,13 +258,6 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
         main_thread_->Quit();
   }
 
-  // Common message handling
-  virtual void HandleMessage(rtc::AsyncPacketSocket* socket,
-                             const std::string& message,
-                             const rtc::SocketAddress& remote_addr);
-
-  virtual bool SendMessage(const std::string& message);
-
   // Message sequence tracking
   int ice_candidates_sent_ = 0;
   int ice_candidates_received_ = 0;
@@ -315,6 +310,10 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
 
   // Track all sockets created by WrapSocket or CreateSocket
   std::vector<rtc::Socket*> tracked_sockets_;
+
+  // Whillats TTS
+  WhillatsLlama* llama_;
+  WhillatsSetResponseCallback llamaCallback_;
 };
 
 class DIRECT_API DirectPeer : public DirectApplication {
