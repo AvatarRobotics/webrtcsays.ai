@@ -20,6 +20,8 @@
 #include "api/task_queue/task_queue_factory.h"
 #include "modules/audio_device/audio_device_generic.h"
 
+#include "modules/third_party/whillats/src/whillats.h"
+
 namespace webrtc {
 
 // This class is used by audio_device_impl.cc when WebRTC is compiled with
@@ -29,14 +31,33 @@ namespace webrtc {
 class SpeechAudioDeviceFactory {
  public:
   static AudioDeviceGeneric* CreateSpeechAudioDevice();
+  static void SetTaskQueueFactory(TaskQueueFactory* task_queue_factory);
+
   static void SetWhisperModelFilename(absl::string_view whisper_model_filename);
   static void SetLlamaModelFilename(absl::string_view llama_model_filename);
   static void SetLlavaMMProjFilename(absl::string_view llava_mmproj_filename);
   static void SetWavFilename(absl::string_view wav_filename);
   static void SetYuvFilename(absl::string_view yuv_filename);
-  static void SetTaskQueueFactory(TaskQueueFactory* task_queue_factory);
+  static const std::string& GetWhisperModelFilename() { return _whisperModelFilename; }
+  static const std::string& GetLlamaModelFilename() { return _llamaModelFilename; }
+  static const std::string& GetLlavaMMProjFilename() { return _llavaMMProjFilename; }
+  static const std::string& GetWavFilename() { return _wavFilename; }
+  static const std::string& GetYuvFilename() { return _yuvFilename; }
 
+  static WhillatsTTS* tts() { return _ttsDevice.get(); }
+  static WhillatsTranscriber* whisper() { return _whisperDevice.get(); }
+  static WhillatsLlama* llama() { return _llamaDevice.get(); }
+
+  friend class WhisperAudioDevice;
  private:
+  static WhillatsTTS* CreateWhillatsTTS(
+    WhillatsSetAudioCallback &ttsCallback);
+  static WhillatsTranscriber* CreateWhillatsTranscriber(
+    WhillatsSetResponseCallback &whisperCallback,
+    WhillatsSetLanguageCallback &languageCallback);
+  static WhillatsLlama* CreateWhillatsLlama(
+    WhillatsSetResponseCallback &llamaCallback);
+
   enum : uint32_t { MAX_FILENAME_LEN = 512 };
 
   // The input whisper model file must be a ggml file (https://github.com/ggerganov/whisper.cpp/blob/master/models/README.md)
@@ -50,7 +71,15 @@ class SpeechAudioDeviceFactory {
   // This is a yuv file, to send to llama-llava
   static std::string _yuvFilename;
   
+  // This is a task queue factory, to create task queues for the audio device
   static TaskQueueFactory* _taskQueueFactory;
+
+  // This is a whisper device, to send to whisper
+  static std::unique_ptr<WhillatsTranscriber> _whisperDevice;
+  // This is a llama device, to send to llama-llava
+  static std::unique_ptr<WhillatsLlama> _llamaDevice;
+  // This is a tts device, to send to tts
+  static std::unique_ptr<WhillatsTTS> _ttsDevice;
 };
 
 }  // namespace webrtc

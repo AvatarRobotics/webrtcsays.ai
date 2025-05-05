@@ -14,17 +14,22 @@
 
 #include <string>
 #include <vector>
+#include <signal.h>
+#include <iostream>
 
 #include "direct.h"
 #include "option.h"
 
-static int g_shutdown = 0;
+static volatile sig_atomic_t g_shutdown = 0;
 
-// Signal handler for Ctrl+C
+// Signal handler for Ctrl+C: first press starts graceful shutdown, second press aborts immediately
 void signalHandler(int signal) {
     if (signal == SIGINT) {
-        std::cout << "\nCtrl+C received, shutting down...\n";
-        g_shutdown = 1;
+        if (!g_shutdown) {
+            g_shutdown = 1;
+            std::cout << "\nCtrl+C received, shutting down...\n";
+            ::signal(SIGINT, SIG_DFL); // restore default for next press
+        }
     }
 }
 
