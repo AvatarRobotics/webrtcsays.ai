@@ -49,9 +49,12 @@ rtc::IPAddress IPFromString(absl::string_view str) {
 }
 
 void llamaCallback(bool success, const char* response, void* user_data) {
-  DirectApplication* app = static_cast<DirectApplication*>(user_data);
-  if (app) {
-    app->SendMessage("LLAMA:" + std::string(response));
+  if (success && *response && user_data) {
+    DirectApplication* app = static_cast<DirectApplication*>(user_data);
+    if(app) {
+      std::string language = webrtc::SpeechAudioDeviceFactory::GetLanguage();
+      app->SendMessage("LLAMA:[" + language + "]" + std::string(response));
+    }
   }
 }
 
@@ -311,17 +314,18 @@ bool DirectApplication::CreatePeerConnection() {
   webrtc::AudioDeviceModule::AudioLayer kAudioDeviceModuleType = webrtc::AudioDeviceModule::kPlatformDefaultAudio;
 #ifdef WEBRTC_SPEECH_DEVICES
 
-  if (opts_.whisper) {
-    kAudioDeviceModuleType = webrtc::AudioDeviceModule::kSpeechAudio; 
-    webrtc::SpeechAudioDeviceFactory::SetWhisperEnabled(true);
-    webrtc::SpeechAudioDeviceFactory::SetWhisperModelFilename(opts_.whisper_model);
-  }
   if (opts_.llama) {
     webrtc::SpeechAudioDeviceFactory::SetLlamaEnabled(true);
     webrtc::SpeechAudioDeviceFactory::SetLlamaModelFilename(opts_.llama_model);
     webrtc::SpeechAudioDeviceFactory::SetLlavaMMProjFilename(opts_.llava_mmproj);
     llama_ = webrtc::SpeechAudioDeviceFactory::CreateWhillatsLlama(llamaCallback_);
   } 
+
+  if (opts_.whisper) {
+    kAudioDeviceModuleType = webrtc::AudioDeviceModule::kSpeechAudio; 
+    webrtc::SpeechAudioDeviceFactory::SetWhisperEnabled(true);
+    webrtc::SpeechAudioDeviceFactory::SetWhisperModelFilename(opts_.whisper_model);
+  }
 
   if (!opts_.llama_llava_yuv.empty()) {
     webrtc::SpeechAudioDeviceFactory::SetYuvFilename(opts_.llama_llava_yuv, 

@@ -41,6 +41,12 @@ bool SpeechAudioDeviceFactory::_llamaEnabled = false;
 
 
 WhillatsTTS* SpeechAudioDeviceFactory::CreateWhillatsTTS(WhillatsSetAudioCallback &ttsCallback) {
+  // NOTE DEMO HACK: If llama is enabled, don't create TTS. 
+  // TTS is not supported on callee side until OSX TTS issues are resolved .
+  if(_llamaEnabled) {
+    return nullptr;
+  }
+
   if(_ttsDevice)
     return _ttsDevice.get();
 

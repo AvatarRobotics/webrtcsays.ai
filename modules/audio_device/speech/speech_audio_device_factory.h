@@ -44,6 +44,8 @@ class SpeechAudioDeviceFactory {
   static const std::string& GetWavFilename() { return _wavFilename; }
   static const std::string& GetYuvFilename() { return _yuvFilename; }
   static const YUVData& GetYuvData() { return _yuvData; }
+  static const std::string GetLanguage() { 
+    return _whisperDevice? _whisperDevice->getLanguage() : "en"; }
 
   static void SetWhisperEnabled(bool enabled) { _whisperEnabled = enabled; }
   static void SetLlamaEnabled(bool enabled) { _llamaEnabled = enabled; }
