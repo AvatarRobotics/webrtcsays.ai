@@ -26,6 +26,7 @@
 #include "api/video_codecs/video_encoder_factory_template_libvpx_vp8_adapter.h"
 #include "api/video_codecs/video_encoder_factory_template_libvpx_vp9_adapter.h"
 #include "api/video_codecs/video_encoder_factory_template_open_h264_adapter.h"
+#include <regex>
 
 #include "direct.h"
 #include "option.h"
@@ -551,8 +552,19 @@ void DirectApplication::HandleMessage(rtc::AsyncPacketSocket* socket,
       SendMessage("BYE");
     }
   } else if (message.find("LLAMA:") == 0) {
-    std::string response = message.substr(6);
-    RTC_LOG(LS_INFO) << "LLAMA message: " << response;
+    std::string payload = message.substr(6);
+    std::string language, text;
+    std::regex re("^\\[([^\\]]+)\\](.*)$");
+    std::smatch match;
+    if (std::regex_match(payload, match, re)) {
+      language = match[1].str();
+      text = match[2].str();
+    } else {
+      language = "en";
+      text = payload;
+    }
+    RTC_LOG(LS_INFO) << "Speaking: [" << language << "] " << text;
+    webrtc::SpeechAudioDeviceFactory::SpeakText(text, language);
   }
 }
 

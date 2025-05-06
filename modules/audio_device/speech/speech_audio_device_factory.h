@@ -46,6 +46,10 @@ class SpeechAudioDeviceFactory {
   static const YUVData& GetYuvData() { return _yuvData; }
   static const std::string GetLanguage() { 
     return _whisperDevice? _whisperDevice->getLanguage() : "en"; }
+  static void SpeakText(const std::string& text, const std::string& language) { 
+    if(_ttsDevice)
+      _ttsDevice->queueText(text.c_str(), language.c_str());
+  }
 
   static void SetWhisperEnabled(bool enabled) { _whisperEnabled = enabled; }
   static void SetLlamaEnabled(bool enabled) { _llamaEnabled = enabled; }
