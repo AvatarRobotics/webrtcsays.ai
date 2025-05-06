@@ -44,6 +44,7 @@ WhillatsTTS* SpeechAudioDeviceFactory::CreateWhillatsTTS(WhillatsSetAudioCallbac
   // NOTE DEMO HACK: If llama is enabled, don't create TTS. 
   // TTS is not supported on callee side until OSX TTS issues are resolved .
   if(_llamaEnabled) {
+    RTC_LOG(LS_INFO) << "TTS is not supported on callee (the one with llama) side until OSX TTS issues are resolved.";
     return nullptr;
   }
 
@@ -75,6 +76,24 @@ WhillatsLlama* SpeechAudioDeviceFactory::CreateWhillatsLlama(WhillatsSetResponse
     return _llamaDevice.get();
   }
   return nullptr;
+}
+
+void SpeechAudioDeviceFactory::NotifyText(const std::string& text, const std::string& language) { 
+  if(!_ttsDevice) {
+    static AudioCallback ttsCallback = [](bool success, const uint16_t* buffer, size_t buffer_size, void* user_data) {};
+    static  WhillatsSetAudioCallback callback(ttsCallback, nullptr);
+    WhillatsTTS* tts = CreateWhillatsTTS(callback);
+    if(tts) {
+      tts->start(false);
+    }
+  }
+  if(_ttsDevice)
+    _ttsDevice->queueText(text.c_str(), language.c_str());
+}
+
+void SpeechAudioDeviceFactory::SpeakText(const std::string& text, const std::string& language) { 
+  if(_ttsDevice)
+    _ttsDevice->queueText(text.c_str(), language.c_str());
 }
 
 void SpeechAudioDeviceFactory::SetWhisperModelFilename(absl::string_view whisper_model_filename) {

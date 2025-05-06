@@ -564,7 +564,7 @@ void DirectApplication::HandleMessage(rtc::AsyncPacketSocket* socket,
       text = payload;
     }
     RTC_LOG(LS_INFO) << "Speaking: [" << language << "] " << text;
-    webrtc::SpeechAudioDeviceFactory::SpeakText(text, language);
+    webrtc::SpeechAudioDeviceFactory::NotifyText(text, language);
   }
 }
 
