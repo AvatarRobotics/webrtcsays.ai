@@ -322,13 +322,13 @@ bool DirectApplication::CreatePeerConnection() {
     llama_ = webrtc::SpeechAudioDeviceFactory::CreateWhillatsLlama(llamaCallback_);
   } 
 
-  if (opts_.whisper) {
+  if (opts_.whisper && !opts_.whisper_model.empty()) {
     kAudioDeviceModuleType = webrtc::AudioDeviceModule::kSpeechAudio; 
     webrtc::SpeechAudioDeviceFactory::SetWhisperEnabled(true);
     webrtc::SpeechAudioDeviceFactory::SetWhisperModelFilename(opts_.whisper_model);
   }
 
-  if (!opts_.llama_llava_yuv.empty()) {
+  if (opts_.llama && !opts_.llama_llava_yuv.empty()) {
     webrtc::SpeechAudioDeviceFactory::SetYuvFilename(opts_.llama_llava_yuv, 
       opts_.llama_llava_yuv_width, opts_.llama_llava_yuv_height);
   }

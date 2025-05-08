@@ -1,4 +1,16 @@
-#ifdef __OBJC__
+/*
+ *  (c) 2025, wilddolphin2022
+ *  For WebRTCsays.ai project
+ *  https://github.com/wilddolphin2022
+ *
+ *  Use of this source code is governed by a BSD-style license
+ *  that can be found in the LICENSE file in the root of the source
+ *  tree. An additional intellectual property rights grant can be found
+ *  in the file PATENTS.  All contributing project authors may
+ *  be found in the AUTHORS file in the root of the source tree.
+ */
+
+#if defined(WEBRTC_IOS) && defined(__OBJC__)
 #import "direct.h"
 #import "sdk/objc/base/RTCVideoCapturer.h"
 #import "sdk/objc/components/renderer/metal/RTCMTLVideoView.h"
@@ -26,4 +38,4 @@ void DirectApplication::SetVideoRenderer(RTCMTLVideoView* renderer) {
   // Hand it to the C++ engine
   SetVideoSink(std::move(native_sink));
 }
-#endif  // __OBJC__ 
+#endif  // defined(WEBRTC_IOS) && defined(__OBJC__)

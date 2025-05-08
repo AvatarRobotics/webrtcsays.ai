@@ -17,6 +17,7 @@
 
 #include "direct.h"
 #include "option.h"
+#include "room.h"
 
 static int g_shutdown = 0;
 
@@ -51,11 +52,12 @@ int main(int argc, char* argv[]) {
   // Install signal handler for Ctrl+C
   signal(SIGINT, signalHandler);
 
-  DirectSetLoggingLevel(LoggingSeverity::LS_INFO);
+  DirectSetLoggingLevel(LoggingSeverity::LS_VERBOSE);
   DirectApplication::rtcInitialize();
+
   std::unique_ptr<DirectCallee> callee;
   std::unique_ptr<DirectCaller> caller;
-
+  std::unique_ptr<RoomCaller> room;
   if(opts.mode == "callee" or opts.mode == "both") {
     callee = std::make_unique<DirectCallee>(opts);
     if (!callee->Initialize()) {
@@ -81,6 +83,19 @@ int main(int argc, char* argv[]) {
       return 1;
     }
     caller->RunOnBackgroundThread();
+  }
+
+  if(opts.mode == "room") {
+    room = std::make_unique<RoomCaller>(opts);
+    if (!room->Initialize()) {
+      fprintf(stderr, "failed to initialize room\n");
+      return 1;
+    }
+    if (!room->Connect()) {
+      fprintf(stderr, "failed to connect\n");
+      return 1;
+    }    
+    room->RunOnBackgroundThread();
   }
 
   while (!g_shutdown) {

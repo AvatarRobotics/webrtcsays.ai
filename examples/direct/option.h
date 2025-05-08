@@ -70,6 +70,13 @@ enum LoggingSeverity {
   LS_NONE,
 };
 
+#define AS_VERBOSE LS_VERBOSE
+#define AS_INFO LS_INFO
+#define AS_WARNING LS_WARNING
+#define AS_ERROR LS_ERROR
+#define AS_NONE LS_NONE
+#define APP_LOG(x) RTC_LOG(x)
+
 #endif // DIRECT_EXPORT_H 
 
 // Command line options
@@ -99,6 +106,8 @@ struct Options {
 // Function to parse command line string to above options
 DIRECT_API Options parseOptions(const char* argString);
 Options parseOptions(const std::vector<std::string>& args);
+
+bool ParseIpAndPort(const std::string& ip_port, std::string& ip, int& port);
 
 // Function to get command line options to a string, to print or speak
 DIRECT_API std::string getUsage(const Options opts);

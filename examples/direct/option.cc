@@ -24,7 +24,7 @@
 
 #include "option.h"
 
-/// Function to parse IP address and port from a string in the format "IP:PORT"
+// Function to parse IP address and port from a string in the format "IP:PORT"
 bool ParseIpAndPort(const std::string& ip_port, std::string& ip, int& port);
 // String split
 std::vector<std::string> stringSplit(std::string input, std::string delimiter);

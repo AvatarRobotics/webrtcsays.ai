@@ -46,7 +46,7 @@ group("examples") {
     deps += [ ":stun_prober" ]
   }
 
-  if (is_ios || (is_mac && target_cpu != "x86")) {
+  if (is_ios) {
     deps += [ ":AppRTCMobile" ]
   }
 
@@ -228,7 +228,7 @@ if (is_android) {
   }
 }
 
-if (is_ios || (is_mac && target_cpu != "x86")) {
+if (is_ios) {
   config("apprtc_common_config") {
     include_dirs = [ "objc/AppRTCMobile/common" ]
   }
@@ -950,7 +950,6 @@ if (!build_with_chromium) {
       defines = [ "WEBRTC_LIBRARY_IMPL" ]
       include_dirs = []
       sources = [
-        # Keep .h files here for compilation but they are copied via action above
         "direct/direct.h",
         "direct/option.h",
         "direct/direct.cc",
@@ -959,13 +958,19 @@ if (!build_with_chromium) {
         "direct/callee.cc",
         "direct/peer.cc",
         "direct/option.cc",
+        "direct/room.cc",
+        "direct/msoup.cc",
       ]
 
       # Use the output of the action_foreach target for public headers
       public_headers = get_target_outputs(":create_bracket_include_headers_direct_framework")
 
       cflags = [ "-g", "-O0" ]
-      include_dirs += [ "../third_party/boringssl/src/include" ]
+      include_dirs += [ 
+        "../third_party/boringssl/src/include",
+        "../third_party/jsoncpp/source/include",
+        "../sdk/objc/base",
+      ]
       if (rtc_use_speech_audio_devices) {
         defines += [ "WEBRTC_SPEECH_DEVICES" ]
       }
@@ -1070,10 +1075,13 @@ if (!build_with_chromium) {
         "direct/direct.h",
         "direct/option.h",
         "direct/direct.cc",
+        "direct/dirobjc.mm",
         "direct/caller.cc",
         "direct/callee.cc",
         "direct/peer.cc",
         "direct/option.cc",
+        "direct/room.cc",
+        "direct/msoup.cc",
       ]
 
       if (rtc_use_speech_audio_devices) {
@@ -1081,7 +1089,11 @@ if (!build_with_chromium) {
       }
 
       cflags = [ "-g", "-O0" ]
-      include_dirs += [ "../third_party/boringssl/src/include" ]
+      include_dirs += [ 
+        "../third_party/boringssl/src/include",
+        "../third_party/jsoncpp/source/include",
+        "../sdk/objc/base",
+      ]
 
       deps = [
         #"//sdk/dylib:webrtc_dylib",
@@ -1175,6 +1187,7 @@ if (!build_with_chromium) {
 
     cflags = [ "-g", "-O0" ]
     include_dirs += [ "../third_party/boringssl/src/include" ]
+    include_dirs += [ "../third_party/jsoncpp/source/include" ]
 
 
     if (is_ios) {

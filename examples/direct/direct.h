@@ -96,7 +96,7 @@
 #endif  // WEBRTC_SPEECH_DEVICES
 
 // Inject Obj-C forward declarations only:
-#ifdef __OBJC__
+#if defined(WEBRTC_IOS) && defined(__OBJC__)
 #import "sdk/objc/base/RTCVideoCapturer.h"
 #import "sdk/objc/components/renderer/metal/RTCMTLVideoView.h"
 #endif
@@ -195,7 +195,7 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
   virtual bool SetVideoSink(std::unique_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> video_sink);
 
   // Set video capturer from Objective-C
-#ifdef __OBJC__
+#if defined(WEBRTC_IOS) && defined(__OBJC__)
   void SetVideoCapturer(RTC_OBJC_TYPE(RTCVideoCapturer)* capturer);
   void SetVideoRenderer(RTC_OBJC_TYPE(RTCMTLVideoView)* renderer);
 #endif
