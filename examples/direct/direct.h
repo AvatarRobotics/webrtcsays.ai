@@ -168,6 +168,8 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
 
   virtual bool SendMessage(const std::string& message);
 
+  virtual void OnClose(rtc::AsyncPacketSocket* socket) {}
+
   // Run the application event loop
   void Run();
   void RunOnBackgroundThread();
@@ -353,6 +355,8 @@ class DIRECT_API DirectPeer : public DirectApplication {
       webrtc::PeerConnectionInterface::SignalingState new_state) override;
   void OnIceConnectionChange(webrtc::PeerConnectionInterface::IceConnectionState new_state) override;
 
+  // Event to signal complete connection closure
+  rtc::Event connection_closed_event_;
  protected:
   // Override the virtual shutdown method from DirectApplication
   void ShutdownInternal() override;
@@ -365,8 +369,8 @@ class DIRECT_API DirectPeer : public DirectApplication {
   void SetRemoteDescription(const std::string& sdp);
   void AddIceCandidate(const std::string& candidate_sdp);
 
- private:
   rtc::scoped_refptr<webrtc::AudioTrackInterface> audio_track_;
+ private:
 
   std::vector<std::string> pending_ice_candidates_;
 
@@ -376,9 +380,6 @@ class DIRECT_API DirectPeer : public DirectApplication {
       set_local_description_observer_;
   rtc::scoped_refptr<LambdaSetRemoteDescriptionObserver>
       set_remote_description_observer_;
-
-  // Event to signal complete connection closure
-  rtc::Event connection_closed_event_;
 };
 
 class DIRECT_API DirectCallee : public DirectPeer, public sigslot::has_slots<> {
@@ -395,6 +396,8 @@ class DIRECT_API DirectCallee : public DirectPeer, public sigslot::has_slots<> {
                  const unsigned char* data,
                  size_t len,
                  const rtc::SocketAddress& remote_addr);
+  virtual void OnClose(rtc::AsyncPacketSocket* socket) override;
+  void OnCancel(rtc::AsyncPacketSocket* socket);
 
   // Callee does not initiate connection, overrides base class
   bool Connect() { return false; }
@@ -424,7 +427,8 @@ class DIRECT_API DirectCaller : public DirectPeer {
 
   // Called when connection is established
   void OnConnect(rtc::AsyncPacketSocket* socket);
-
+  void OnClose(rtc::AsyncPacketSocket* socket) override {}
+  
   rtc::SocketAddress remote_addr_;
   // std::unique_ptr<rtc::AsyncTCPSocket> tcp_socket_;
   std::chrono::steady_clock::time_point last_disconnect_time_;

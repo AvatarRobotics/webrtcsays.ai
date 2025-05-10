@@ -14,12 +14,17 @@
 
 #include <string>
 #include <vector>
+#include <climits>
+#include <csignal>
+#include <iostream>
+#include <thread>
+#include <chrono>
 
 #include "direct.h"
 #include "option.h"
 #include "room.h"
 
-static int g_shutdown = 0;
+static bool g_shutdown = false;
 
 // Signal handler for Ctrl+C
 void signalHandler(int signal) {
@@ -52,23 +57,35 @@ int main(int argc, char* argv[]) {
   // Install signal handler for Ctrl+C
   signal(SIGINT, signalHandler);
 
-  DirectSetLoggingLevel(LoggingSeverity::LS_VERBOSE);
+  DirectSetLoggingLevel(LoggingSeverity::LS_INFO);
   DirectApplication::rtcInitialize();
 
   std::unique_ptr<DirectCallee> callee;
   std::unique_ptr<DirectCaller> caller;
   std::unique_ptr<RoomCaller> room;
-  if(opts.mode == "callee" or opts.mode == "both") {
-    callee = std::make_unique<DirectCallee>(opts);
-    if (!callee->Initialize()) {
-      fprintf(stderr, "failed to initialize callee\n");
-      return 1;
+  if (opts.mode == "callee" or opts.mode == "both") {
+    while (!g_shutdown) {
+      callee = std::make_unique<DirectCallee>(opts);
+      if (!callee->Initialize()) {
+        fprintf(stderr, "failed to initialize callee\n");
+        return 1;
+      }
+      if (!callee->StartListening()) {
+        fprintf(stderr, "Failed to start listening\n");
+        return 1;
+      }
+      callee->RunOnBackgroundThread();
+
+      // Prepare new session and wait for CANCEL or Ctrl+C
+      callee->ResetConnectionClosedEvent();
+      while (!g_shutdown) {
+        if (callee->WaitUntilConnectionClosed(1000)) {
+          fprintf(stderr, "Callee session ended, restarting listener\n");
+          break;
+        }
+      }
+      callee.reset();
     }
-    if (!callee->StartListening()) {
-      fprintf(stderr, "Failed to start listening\n");
-      return 1;
-    }
-    callee->RunOnBackgroundThread();
   }
 
   if(opts.mode == "caller" or opts.mode == "both") {
@@ -99,7 +116,7 @@ int main(int argc, char* argv[]) {
   }
 
   while (!g_shutdown) {
-    usleep(100000);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
 
   if(opts.mode == "caller" or opts.mode == "both") {
@@ -112,8 +129,10 @@ int main(int argc, char* argv[]) {
   }
 
   if(opts.mode == "callee" or opts.mode == "both") {
-    callee->SignalQuit();
-    callee.reset();
+    if (callee) {
+      callee->SignalQuit();
+      callee.reset();
+    }
   }
 
   if(opts.mode == "caller" or opts.mode == "both") {

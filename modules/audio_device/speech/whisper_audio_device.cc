@@ -38,13 +38,6 @@
 //#define PLAY_WAV_ON_PLAY 1
 #define LLAMA_ENABLED 1
 
-#ifdef __APPLE__ 
-  #define USE_CF_RUNLOOP 1
-  #if USE_CF_RUNLOOP
-    #include <CoreFoundation/CFRunLoop.h> // For CFRunLoopRunInMode
-  #endif
-#endif
-
 namespace webrtc {
 
 const int kRecordingFixedSampleRate = 16000;  // Whisper typically uses 16kHz
@@ -363,17 +356,9 @@ bool WhisperAudioDevice::RecThreadProcess() {
 
       if (shouldSynthesize) {
         RTC_LOG(LS_INFO) << "Queueing TTS text: " << textToSpeak;
-        SpeechAudioDeviceFactory::tts()->queueText(textToSpeak.c_str(), 
-          SpeechAudioDeviceFactory::whisper()->getLanguage().c_str());
-#if USE_CF_RUNLOOP
-        // Pump the CFRunLoop until we get the first TTS buffer, up to 200ms
-        CFTimeInterval remainingPump = 0.2;
-        while (_ttsBuffer.empty() && remainingPump > 0) {
-          CFTimeInterval chunk = std::min(remainingPump, (CFTimeInterval)0.05);
-          CFRunLoopRunInMode(kCFRunLoopDefaultMode, chunk, /*returnAfterSourceHandled=*/true);
-          remainingPump -= chunk;
-        }
-#endif
+        SpeechAudioDeviceFactory::NotifyText(
+            textToSpeak,
+            SpeechAudioDeviceFactory::GetLanguage());
       } else {
         // Send silence for a full 10ms frame
         std::fill_n(
@@ -393,23 +378,13 @@ bool WhisperAudioDevice::RecThreadProcess() {
     // Pacing for the next 10ms chunk
     int64_t sleepTime = 10 - (rtc::TimeMillis() - currentTime);
     if (sleepTime > 0) {
-#if USE_CF_RUNLOOP
-      // CFTimeInterval is in seconds, so divide ms by 1000.0
-      CFTimeInterval waitSecs = sleepTime / 1000.0;
-      CFRunLoopRunInMode(kCFRunLoopDefaultMode, waitSecs, /*returnAfterSourceHandled=*/true);
-#else
       mutex_.Unlock();
       SleepMs(sleepTime);
       mutex_.Lock();
-#endif
     }
   }
 
   mutex_.Unlock();
-#if USE_CF_RUNLOOP
-  // Ensure runloop processes any final callbacks
-  CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.001, /*returnAfterSourceHandled=*/true);
-#endif
   return true;
 }
 

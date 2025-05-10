@@ -55,13 +55,6 @@
     #define DIRECT_API DIRECT_IMPORT
 #endif
 
-#ifdef __APPLE__ 
-  #define USE_CF_RUNLOOP 1
-  #if USE_CF_RUNLOOP
-    #include <CoreFoundation/CFRunLoop.h> // For CFRunLoopRunInMode
-  #endif
-#endif
-
 enum LoggingSeverity {
   LS_VERBOSE,
   LS_INFO,

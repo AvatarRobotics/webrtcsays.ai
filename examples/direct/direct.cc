@@ -63,19 +63,8 @@ void llamaCallback(bool success, const char* response, void* user_data) {
 DirectApplication::DirectApplication(Options opts)
   : opts_(opts),
     llama_(nullptr),
-    llamaCallback_(llamaCallback, this)
-{
-
-  main_thread_ = rtc::Thread::CreateWithSocketServer();
-  main_thread_->socketserver()->SetMessageQueue(main_thread_.get());
-  DirectThreadSetName(main_thread(), "Main");
-
-  ws_thread_ = rtc::Thread::Create();
-  worker_thread_ = rtc::Thread::Create();
-  signaling_thread_ = rtc::Thread::Create();
-  network_thread_ = std::make_unique<rtc::Thread>(DirectApplication::pss());
-  network_thread_->socketserver()->SetMessageQueue(network_thread_.get());
-
+    llamaCallback_(llamaCallback, this) {
+  // Threads will be created in Initialize() to support full teardown/re-init
   peer_connection_factory_ = nullptr;
 }
 
@@ -263,6 +252,16 @@ DirectApplication::~DirectApplication() {
 
 bool DirectApplication::Initialize() {
   RTC_DCHECK_RUN_ON(&sequence_checker_);
+
+  // Create and configure WebRTC threads
+  main_thread_ = rtc::Thread::CreateWithSocketServer();
+  main_thread_->socketserver()->SetMessageQueue(main_thread_.get());
+  DirectThreadSetName(main_thread(), "Main");
+  ws_thread_ = rtc::Thread::Create();
+  worker_thread_ = rtc::Thread::Create();
+  signaling_thread_ = rtc::Thread::Create();
+  network_thread_ = std::make_unique<rtc::Thread>(pss());
+  network_thread_->socketserver()->SetMessageQueue(network_thread_.get());
 
   if (!worker_thread_->Start() || !signaling_thread_->Start() ||
       !network_thread_->Start()) {
@@ -609,8 +608,8 @@ void DirectApplication::OnAddTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterfa
         auto* video_track = static_cast<webrtc::VideoTrackInterface*>(receiver->track().get());
         
         // Ensure we don't add multiple sinks
-        if(!video_sink_) {
-            video_sink_ = std::make_unique<webrtc::ConsoleVideoRenderer>();
+        if(!video_sink_ && opts_.llama) {
+            video_sink_ = std::make_unique<webrtc::LlamaVideoRenderer>();
         }
         
         if (video_sink_) {

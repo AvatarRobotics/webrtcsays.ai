@@ -14,7 +14,9 @@
 #define AUDIO_DEVICE_SPEECH_AUDIO_DEVICE_FACTORY_H_
 
 #include <stdint.h>
-#include <mutex>
+#include <memory>
+#include <queue>
+#include "absl/synchronization/mutex.h"
 
 #include "absl/strings/string_view.h"
 #include "api/task_queue/task_queue_factory.h"
@@ -43,7 +45,7 @@ class SpeechAudioDeviceFactory {
   static const std::string& GetLlavaMMProjFilename() { return _llavaMMProjFilename; }
   static const std::string& GetWavFilename() { return _wavFilename; }
   static const std::string& GetYuvFilename() { return _yuvFilename; }
-  static const YUVData& GetYuvData() { return _yuvData; }
+  static YUVData& GetYuvData() { return _yuvData; }
   static const std::string GetLanguage() { 
     return _whisperDevice? _whisperDevice->getLanguage() : "en"; }
   static void NotifyText(const std::string& text, const std::string& language);
@@ -66,7 +68,7 @@ class SpeechAudioDeviceFactory {
 
   friend class WhisperAudioDevice;
  private:
-  static TaskQueueFactory* _taskQueueFactory;
+  static std::unique_ptr<TaskQueueFactory> _taskQueueFactory;
 
   enum : uint32_t { MAX_FILENAME_LEN = 512 };
 
@@ -92,6 +94,12 @@ class SpeechAudioDeviceFactory {
   static std::unique_ptr<WhillatsLlama> _llamaDevice;
   // This is a tts device, to send to tts
   static std::unique_ptr<WhillatsTTS> _ttsDevice;
+
+  // Queue of text to speak
+  static std::unique_ptr<TaskQueueBase, TaskQueueDeleter> _textToSpeakQueue;
+  static absl::Mutex _textToSpeakQueueMutex;
+  // Enqueue text with specified language for TTS
+  static void addTextToSpeakQueue(const std::string& text, const std::string& language);
 };
 
 }  // namespace webrtc

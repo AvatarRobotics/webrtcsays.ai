@@ -194,9 +194,10 @@ class StaticPeriodicVideoTrackSource : public VideoTrackSource {
 };
 
 // Simple video sink that logs frame information to the console
-class ConsoleVideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+class LlamaVideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
  public:
   void OnFrame(const webrtc::VideoFrame& frame) {
+
     if (!received_frame_) {
       rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer(
           frame.video_frame_buffer());
@@ -207,26 +208,20 @@ class ConsoleVideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> 
       // Convert the frame to I420 format and populate YUVData
       rtc::scoped_refptr<webrtc::I420BufferInterface> i420_buffer = buffer->ToI420();
       if (i420_buffer) {
-        int width = i420_buffer->width();
-        int height = i420_buffer->height();
-        int stride_y = i420_buffer->StrideY();
-        int stride_u = i420_buffer->StrideU();
-        int chroma_height = i420_buffer->ChromaHeight();
+        size_t y_size = i420_buffer->StrideY() * i420_buffer->height();
+        size_t uv_size = i420_buffer->StrideU() * i420_buffer->ChromaHeight();
 
-        size_t y_size = stride_y * height;
-        size_t uv_size = stride_u * chroma_height;
-
-        auto y_data = std::make_unique<uint8_t[]>(y_size);
-        auto u_data = std::make_unique<uint8_t[]>(uv_size);
-        auto v_data = std::make_unique<uint8_t[]>(uv_size);
-
-        memcpy(y_data.get(), i420_buffer->DataY(), y_size);
-        memcpy(u_data.get(), i420_buffer->DataU(), uv_size);
-        memcpy(v_data.get(), i420_buffer->DataV(), uv_size);
-
-        YUVData yuv{std::move(y_data), std::move(u_data), std::move(v_data),
-                    width, height, y_size, uv_size};
-        webrtc::SpeechAudioDeviceFactory::llama()->askWithImage("Describe the image in detail", yuv);
+        if(webrtc::SpeechAudioDeviceFactory::llama()) {
+          webrtc::SpeechAudioDeviceFactory::llama()->askWithYUVRaw(
+            "Please describe the image",
+            i420_buffer->DataY(),
+              i420_buffer->DataU(),
+              i420_buffer->DataV(),
+              i420_buffer->width(),
+              i420_buffer->height(),
+              y_size,
+              uv_size);    
+          }
       }
 
       received_frame_ = true;

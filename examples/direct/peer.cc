@@ -99,10 +99,15 @@ void DirectPeer::Start() {
             if (!video_source_) {
                 // Create a static periodic video source (local fake source)
                 auto static_source = rtc::make_ref_counted<webrtc::StaticPeriodicVideoTrackSource>(false);
-                if (!opts_.llama_llava_yuv.empty()) {
+                if (opts_.llama && !opts_.llama_llava_yuv.empty()) {
                     // Load custom YUV data if available
-                    static_source->static_periodic_source().LoadYuvData(
-                        webrtc::SpeechAudioDeviceFactory::GetYuvData());
+                    RTC_LOG(LS_INFO) << "Loading YUV data from " << opts_.llama_llava_yuv;
+                    YUVData &yuv = webrtc::SpeechAudioDeviceFactory::GetYuvData();
+                    if(yuv.width > 0 && yuv.height > 0) {
+                        static_source->static_periodic_source().LoadYuvData(yuv);
+                    } else {
+                        RTC_LOG(LS_ERROR) << "Invalid YUV data";
+                    }
                 }
                 video_source_ = static_source;
                 RTC_LOG(LS_INFO) << "Created StaticPeriodicVideoTrackSource";
@@ -303,9 +308,14 @@ void DirectPeer::SetRemoteDescription(const std::string& sdp) {
                             // Create a static periodic video source (local fake source)
                             auto static_source = rtc::make_ref_counted<webrtc::StaticPeriodicVideoTrackSource>(false);
                             // Load custom YUV data if available
-                            if (!opts_.llama_llava_yuv.empty()) {
-                                static_source->static_periodic_source().LoadYuvData(
-                                    webrtc::SpeechAudioDeviceFactory::GetYuvData());
+                            if (opts_.llama && !opts_.llama_llava_yuv.empty()) {
+                                RTC_LOG(LS_INFO) << "Loading YUV data from " << opts_.llama_llava_yuv;
+                                YUVData &yuv = webrtc::SpeechAudioDeviceFactory::GetYuvData();
+                                if(yuv.width > 0 && yuv.height > 0) {
+                                    static_source->static_periodic_source().LoadYuvData(yuv);
+                                } else {
+                                    RTC_LOG(LS_ERROR) << "Invalid YUV data";
+                                }
                             }
                             video_source_ = static_source;
                             RTC_LOG(LS_INFO) << "Created StaticPeriodicVideoTrackSource";

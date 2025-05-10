@@ -18,13 +18,15 @@
 #include "rtc_base/logging.h"
 #include "rtc_base/string_utils.h"
 
+#include "api/task_queue/default_task_queue_factory.h"
 #include "modules/audio_device/speech/speech_audio_device_factory.h"
 #include "modules/audio_device/speech/whisper_audio_device.h"
 #include "modules/third_party/whillats/src/whillats_utils.h"
+#include "absl/synchronization/mutex.h"
 
 namespace webrtc {
 
-TaskQueueFactory* SpeechAudioDeviceFactory::_taskQueueFactory;
+std::unique_ptr<TaskQueueFactory> SpeechAudioDeviceFactory::_taskQueueFactory;
 
 std::unique_ptr<WhillatsTranscriber> SpeechAudioDeviceFactory::_whisperDevice;
 std::unique_ptr<WhillatsLlama> SpeechAudioDeviceFactory::_llamaDevice;
@@ -39,6 +41,9 @@ YUVData SpeechAudioDeviceFactory::_yuvData;
 bool SpeechAudioDeviceFactory::_whisperEnabled = false;
 bool SpeechAudioDeviceFactory::_llamaEnabled = false;
 
+// Static queue and mutex for enqueued TTS text tasks
+std::unique_ptr<TaskQueueBase, TaskQueueDeleter> SpeechAudioDeviceFactory::_textToSpeakQueue;
+absl::Mutex SpeechAudioDeviceFactory::_textToSpeakQueueMutex;
 
 WhillatsTTS* SpeechAudioDeviceFactory::CreateWhillatsTTS(WhillatsSetAudioCallback &ttsCallback) {
   // NOTE DEMO HACK: If llama is enabled, don't create TTS. 
@@ -118,13 +123,13 @@ void SpeechAudioDeviceFactory::SetYuvFilename(absl::string_view yuv_filename, in
 }
 
 void SpeechAudioDeviceFactory::SetTaskQueueFactory(TaskQueueFactory* task_queue_factory) {
-  _taskQueueFactory = task_queue_factory;
+  _taskQueueFactory.reset(task_queue_factory);
 }
 
 AudioDeviceGeneric* SpeechAudioDeviceFactory::CreateSpeechAudioDevice() {
   WhisperAudioDevice* whisper_audio_device = nullptr;
   if(!whisper_audio_device) {
-    whisper_audio_device = new WhisperAudioDevice(_taskQueueFactory);
+    whisper_audio_device = new WhisperAudioDevice(_taskQueueFactory.get());
     RTC_LOG(LS_INFO) << "Initialized WhisperAudioDevice instance.";
   }
 

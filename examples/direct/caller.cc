@@ -98,6 +98,11 @@ bool DirectCaller::Connect() {
                           packet.payload().size(), 
                           packet.source_address());
             });
+        tcp_socket_->SubscribeCloseEvent("caller_close_event",
+            [this](rtc::AsyncPacketSocket* socket, int err) {
+                // Access data using packet.payload()
+                OnClose(socket);
+            });
         OnConnect(tcp_socket_.get());
 
         return true;
