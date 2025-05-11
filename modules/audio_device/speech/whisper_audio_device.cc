@@ -53,7 +53,7 @@ void ttsAudioCallback(bool success, const uint16_t* buffer, size_t buffer_size, 
   // Handle audio buffer here
   if(success) {
     WhisperAudioDevice* audio_device = static_cast<WhisperAudioDevice*>(user_data);
-    RTC_LOG(LS_VERBOSE) << "Generated " << buffer_size << " audio samples (" 
+    RTC_LOG(LS_INFO) << "Generated " << buffer_size << " audio samples (" 
       << buffer_size / 16000 << " s)";
     audio_device->SetTTSBuffer(buffer, buffer_size);
   }
@@ -139,13 +139,15 @@ inline void rtrim(std::string &s) {
 
 void WhisperAudioDevice::speakText(const std::string& text) {
   if(_tts_enabled) {
-    absl::MutexLock lock(&_queueMutex);
-    std::string s(text);
-    rtrim(s);
-    ltrim(s);
-    _textQueue.push(s);
+    {
+      absl::MutexLock lock(&_queueMutex);
+      std::string s(text);
+      rtrim(s);
+      ltrim(s);
+      _textQueue.push(s);
+    }
+    _queueCondition.notify_one();  // Inform one waiting thread that an item is available
   }
-  _queueCondition.notify_one();  // Inform one waiting thread that an item is available
 }
 
 // Method to ask llama 
@@ -356,7 +358,7 @@ bool WhisperAudioDevice::RecThreadProcess() {
 
       if (shouldSynthesize) {
         RTC_LOG(LS_INFO) << "Queueing TTS text: " << textToSpeak;
-        SpeechAudioDeviceFactory::NotifyText(
+        SpeechAudioDeviceFactory::SpeakText(
             textToSpeak,
             SpeechAudioDeviceFactory::GetLanguage());
       } else {

@@ -1158,7 +1158,12 @@ if (!build_with_chromium) {
       if (rtc_use_speech_audio_devices) {
         if (is_mac) {
           frameworks = [ "CoreAudio.framework" ]
-          lib_dirs = [ "../modules/third_party/whillats/build/lib/Release" ]
+          if (is_debug) {
+            whillats_subdir = "Debug"
+          } else {
+            whillats_subdir = "Release"
+          }
+          lib_dirs = [ "../modules/third_party/whillats/build/lib/" + whillats_subdir ]
           libs = [ "whillats" ]
         } else if (is_linux) {
           # Add necessary libs for whillats on Linux if applicable
@@ -1227,7 +1232,12 @@ if (!build_with_chromium) {
     if(!is_ios && rtc_use_speech_audio_devices) {
       if(is_mac) {
         frameworks = [ "CoreAudio.framework" ] # System framework
-        ldflags += [ "-Wl,-rpath,@loader_path/../../modules/third_party/whillats/build/lib/Release" ]
+        if (is_debug) {
+          whillats_subdir = "Debug"
+        } else {
+          whillats_subdir = "Release"
+        }
+        ldflags += [ "-Wl,-rpath,@loader_path/../../modules/third_party/whillats/build/lib/" + whillats_subdir ]
       } else if (is_linux) {
           # Add necessary libs/rpath for whillats on Linux if applicable
       }

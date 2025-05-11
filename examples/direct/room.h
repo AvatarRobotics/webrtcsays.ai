@@ -24,7 +24,8 @@ class DIRECT_API RoomCaller : public DirectApplication {
  public:
   explicit RoomCaller(Options opts);
   ~RoomCaller();
-  
+
+  virtual bool Initialize() override;  
   void Run();
   bool Connect();
   void Start();

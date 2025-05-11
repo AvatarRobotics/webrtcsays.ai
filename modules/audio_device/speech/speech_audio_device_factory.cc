@@ -48,10 +48,10 @@ absl::Mutex SpeechAudioDeviceFactory::_textToSpeakQueueMutex;
 WhillatsTTS* SpeechAudioDeviceFactory::CreateWhillatsTTS(WhillatsSetAudioCallback &ttsCallback) {
   // NOTE DEMO HACK: If llama is enabled, don't create TTS. 
   // TTS is not supported on callee side until OSX TTS issues are resolved .
-  if(_llamaEnabled) {
-    RTC_LOG(LS_INFO) << "TTS is not supported on callee (the one with llama) side until OSX TTS issues are resolved.";
-    return nullptr;
-  }
+  // if(_llamaEnabled) {
+  //   RTC_LOG(LS_INFO) << "TTS is not supported on callee (the one with llama) side until OSX TTS issues are resolved.";
+  //   return nullptr;
+  // }
 
   if(_ttsDevice)
     return _ttsDevice.get();

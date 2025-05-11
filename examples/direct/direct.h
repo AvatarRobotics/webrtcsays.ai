@@ -158,8 +158,8 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
   ~DirectApplication() override;
 
   // Initialize threads and basic WebRTC infrastructure
-  bool DIRECT_API Initialize();
-  bool CreatePeerConnection();
+  virtual bool Initialize();
+  virtual bool CreatePeerConnection();
 
   // Common message handling
   virtual void HandleMessage(rtc::AsyncPacketSocket* socket,

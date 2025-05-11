@@ -178,34 +178,34 @@ RoomCaller::RoomCaller(Options opts)
       producer_created_(false),
       sdp_negotiation_started_(false),
       reconnect_attempts_(0) {
-  // Initialization is now handled by main(), so we remove the DirectApplication::Initialize() call here
-  
-  // Create WebSocket thread first
-  // Created in DirectApplication
-  // wsocket_thread_ = rtc::Thread::Create();
+}
+
+bool RoomCaller::Initialize() {
+
+  APP_LOG(AS_INFO) << "RoomCaller::Initialize()";
+  DirectApplication::Initialize();
+
   if (!ws_thread()) {
-    APP_LOG(AS_ERROR) << "DirectApplication failed to create WebSocket thread";
-    return;
+    APP_LOG(AS_ERROR) << "DirectApplication not initialized";
+    return false;
   }
 
   if (!ws_thread()->Start()) {
     APP_LOG(AS_ERROR) << "Failed to start WebSocket thread";
-    return;
+    return false;
   }
 
   APP_LOG(AS_INFO) << "ws_thread()->Start() succeeded."; // <-- ADD THIS
 
-  //DirectThreadSetName(ws_thread(), "WebSocket_Thread");
-
   // Create MediaSoupWrapper first
-  wss_ = std::make_unique<MediaSoupWrapper>(opts.webrtc_cert_path, true);
+  wss_ = std::make_unique<MediaSoupWrapper>(opts_.webrtc_cert_path, true);
   wss_->set_network_thread(ws_thread());
-  wss_->set_key_file(opts.webrtc_key_path);
+  wss_->set_key_file(opts_.webrtc_key_path);
 
   // Set up connection parameters
   std::string ip;
   int port = 0;
-  ParseIpAndPort(opts.address, ip, port);
+  ParseIpAndPort(opts_.address, ip, port);
   if (port == 0) {
     port = 4443;
   }
@@ -215,8 +215,8 @@ RoomCaller::RoomCaller(Options opts)
   wss_->peer_id_ = wss_->generate_peer_id();
   wss_->room_id_ = "room101";
 
-  if (opts.encryption && !certificate_) {
-    certificate_ = DirectLoadCertificateFromEnv(opts);
+  if (opts_.encryption && !certificate_) {
+    certificate_ = DirectLoadCertificateFromEnv(opts_);
     UpdateCertificateStats();
     if(certificate_stats() != nullptr) {
     APP_LOG(AS_INFO) << "Using certificate with fingerprint: "
@@ -226,6 +226,7 @@ RoomCaller::RoomCaller(Options opts)
 
   // Don't connect here - let Run() handle it
   running_ = true;
+  return true;
 }
 
 RoomCaller::~RoomCaller() {
