@@ -249,8 +249,11 @@ int32_t WhisperAudioDevice::StartRecording() {
 
   // Speak the llama model name
   std::filesystem::path llama_model_path = std::filesystem::path(SpeechAudioDeviceFactory::GetLlamaModelFilename());
-  std::string llama_model_name = llama_model_path.stem().string() + " ready to chat";
-  speakText(llama_model_name);
+  std::string llama_model_name = llama_model_path.stem().string();
+  if(!llama_model_name.empty())
+    speakText(llama_model_name + " ready to chat");
+  else
+    speakText("Whisper speech synthesis ready to chat");
 
   _ptrThreadRec = rtc::PlatformThread::SpawnJoinable(
       [this] {
@@ -293,13 +296,26 @@ int32_t WhisperAudioDevice::StopRecording() {
 
 void WhisperAudioDevice::SetTTSBuffer(const uint16_t* buffer, size_t buffer_size) {
   absl::MutexLock lock(&_queueMutex);
-  if (!_ttsBuffer.empty() && _ttsIndex < _ttsBuffer.size()) {
-    RTC_LOG(LS_VERBOSE) << "TTS buffer still playing, delaying new buffer";
-    return; // Wait until current buffer is done
+  if (buffer_size == 0) {
+    // End of utterance: nothing to do, or could set a flag if needed
+    RTC_LOG(LS_VERBOSE) << "Received end-of-utterance sentinel";
+    return;
   }
-  _ttsBuffer = std::vector<uint16_t>(buffer, buffer + buffer_size);
-  _ttsIndex = 0; // Reset index for new buffer
-  RTC_LOG(LS_VERBOSE) << "Set new TTS buffer with " << buffer_size << " samples";
+
+  // High-pass filter: y[n] = x[n] - alpha * x[n-1] + alpha * y[n-1]
+  std::vector<uint16_t> filtered_buffer(buffer_size);
+  float alpha = 0.95f;
+  int16_t prev_x = 0, prev_y = 0;
+  for (size_t i = 0; i < buffer_size; ++i) {
+      int16_t x = buffer[i];
+      int16_t y = x - alpha * prev_x + alpha * prev_y;
+      filtered_buffer[i] = y;
+      prev_x = x;
+      prev_y = y;
+  }
+  // Append new samples to the buffer
+  _ttsBuffer.insert(_ttsBuffer.end(), filtered_buffer.begin(), filtered_buffer.end());
+  RTC_LOG(LS_VERBOSE) << "Appended " << buffer_size << " samples to TTS buffer, total: " << _ttsBuffer.size();
 }
 
 bool WhisperAudioDevice::RecThreadProcess() {
@@ -689,4 +705,5 @@ int32_t WhisperAudioDevice::PlayoutDelay(uint16_t& delayMS) const {
   delayMS = _lastCallPlayoutMillis;
   return 0;
 }
+
 }  // namespace webrtc
