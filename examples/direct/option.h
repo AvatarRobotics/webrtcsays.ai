@@ -54,19 +54,23 @@
 #endif
 
 enum LoggingSeverity {
-  LS_VERBOSE,
-  LS_INFO,
-  LS_WARNING,
-  LS_ERROR,
-  LS_NONE,
+  AS_VERBOSE,
+  AS_INFO,
+  AS_WARNING,
+  AS_ERROR,
+  AS_NONE,
 };
+
+#ifdef RTC_BASE_LOGGING_H_
 
 #define AS_VERBOSE LS_VERBOSE
 #define AS_INFO LS_INFO
 #define AS_WARNING LS_WARNING
 #define AS_ERROR LS_ERROR
+
 #define AS_NONE LS_NONE
 #define APP_LOG(x) RTC_LOG(x)
+#endif // RTC_BASE_LOGGING_H_
 
 #endif // DIRECT_EXPORT_H 
 

@@ -57,7 +57,7 @@ int main(int argc, char* argv[]) {
   // Install signal handler for Ctrl+C
   signal(SIGINT, signalHandler);
 
-  DirectSetLoggingLevel(LoggingSeverity::LS_INFO);
+  //DirectSetLoggingLevel(AS_INFO);
   DirectApplication::rtcInitialize();
 
   std::unique_ptr<DirectCallee> callee;
