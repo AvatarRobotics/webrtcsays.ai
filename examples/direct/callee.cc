@@ -24,6 +24,10 @@
 
 #include "direct.h"
 
+#if TARGET_OS_IOS || TARGET_OS_OSX
+#include "bonjour.h"
+#endif // #if TARGET_OS_IOS || TARGET_OS_OSX
+
 // DirectCallee Implementation
 DirectCallee::DirectCallee(Options opts) : DirectPeer(opts) {
   std::string ip;

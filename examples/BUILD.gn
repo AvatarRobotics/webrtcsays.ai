@@ -965,7 +965,11 @@ if (!build_with_chromium) {
       # Use the output of the action_foreach target for public headers
       public_headers = get_target_outputs(":create_bracket_include_headers_direct_framework")
 
-      cflags = [ "-g", "-O0" ]
+      if(is_debug) {
+        cflags = ["-g", "-O0"]         
+      }
+      #cflags += [ "-mmacosx-version-min=15.0.0" ]
+
       include_dirs += [ 
         "../third_party/boringssl/src/include",
         "../third_party/jsoncpp/source/include",
@@ -1088,7 +1092,11 @@ if (!build_with_chromium) {
         defines += [ "WEBRTC_SPEECH_DEVICES" ]
       }
 
-      cflags = [ "-g", "-O0" ]
+      cflags = [ "-mmacosx-version-min=15.0.0" ]
+      if(is_debug) {
+        cflags += ["-g", "-O0"]         
+      }
+      
       include_dirs += [ 
         "../third_party/boringssl/src/include",
         "../third_party/jsoncpp/source/include",
@@ -1174,7 +1182,7 @@ if (!build_with_chromium) {
 
       if (is_mac) {
         if (!defined(ldflags)) { ldflags = [] }
-        ldflags += [ "-install_name", "@rpath/libdirect.dylib" ]
+        ldflags += [ "-mmacosx-version-min=15.0.0", "-install_name", "@rpath/libdirect.dylib" ]
         ldflags += [ "-Wl,-rpath,@loader_path/../Default" ] # Adjust rpath if needed
       } else if (is_linux) {
         if (!defined(ldflags)) { ldflags = [] }
@@ -1190,10 +1198,17 @@ if (!build_with_chromium) {
     include_dirs = []
     sources = [ "direct/main.cc" ]
 
-    cflags = [ "-g", "-O0" ]
+    # Only set the minimum macOS deployment version for non-iOS builds.
+    cflags = []
+    if (!is_ios) {
+      cflags += [ "-mmacosx-version-min=15.0.0" ]
+    }
+    if (is_debug) {
+      cflags += [ "-g", "-O0" ]
+    }
+
     include_dirs += [ "../third_party/boringssl/src/include" ]
     include_dirs += [ "../third_party/jsoncpp/source/include" ]
-
 
     if (is_ios) {
       # Link against the framework on iOS

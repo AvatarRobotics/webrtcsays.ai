@@ -23,7 +23,6 @@
 #include "direct.h"
 #include "option.h"
 #include "room.h"
-#include "bonjour.h"
 
 static bool g_shutdown = false;
 

@@ -22,6 +22,10 @@
 
 #include "direct.h"
 
+#if TARGET_OS_IOS || TARGET_OS_OSX
+#include "bonjour.h"
+#endif // #if TARGET_OS_IOS || TARGET_OS_OSX
+
 // Function to parse IP address and port from a string in the format "IP:PORT"
 // From option.cc
 bool ParseIpAndPort(const std::string& ip_port, std::string& ip, int& port);
@@ -37,6 +41,7 @@ DirectCaller::DirectCaller(Options opts)
         int port = 0;
         if (DiscoverBonjourService(opts.bonjour_name, ip, port)) {
             remote_addr_ = rtc::SocketAddress(ip, port);
+            RTC_LOG(LS_INFO) << "Bonjour discovery found service " << opts.bonjour_name << " at " << ip << ":" << port;
         } else {
             ParseIpAndPort(opts.address, ip, port);
             remote_addr_ = rtc::SocketAddress(ip, port);
