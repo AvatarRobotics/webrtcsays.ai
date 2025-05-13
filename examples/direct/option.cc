@@ -63,7 +63,7 @@ void __libc_csu_fini() {}
 #endif
 
 // Function to parse IP address and port from a string in the format "IP:PORT"
-bool ParseIpAndPort(const std::string& ip_port, std::string& ip, int& port) {
+bool DIRECT_API ParseIpAndPort(const std::string& ip_port, std::string& ip, int& port) {
   size_t colon_pos = ip_port.find(':');
   if (colon_pos == std::string::npos) {
     RTC_LOG(LS_ERROR) << "Invalid IP:PORT format: " << ip_port;
@@ -147,7 +147,8 @@ Options parseOptions(const std::vector<std::string>& args) {
       "  --webrtc_key_path=<path>           Path to WebRTC key (default: 'key.pem')\n"
       "  --turns=<ip,username,password>     Secured turn server address, e.g. \n"
       "   'turns:global.relay.metered.ca:443?transport=tcp,<username>,<password>'\n"
-      "  --vpn=<interface_name>           Specify VPN interface name\n" // Added VPN help
+      "  --vpn=<interface_name>             Specify VPN interface name\n" // Added VPN help
+      "  --bonjour_name=<name>              Specify bonjour name\n" // Added bonjour name resolution
       "  --help                             Show this help message\n\n"
       "Examples (callee called first, encryption is recommended):\n"
       "  direct --config settings.json\n"
@@ -246,6 +247,10 @@ Options parseOptions(const std::vector<std::string>& args) {
              RTC_LOG(LS_INFO) << "Config vpn: " << config_json["vpn"].asString(); // Log value
              opts.vpn = config_json["vpn"].asString();
         }
+        if (config_json.isMember("bonjour_name") && config_json["bonjour_name"].isString()) {
+             RTC_LOG(LS_INFO) << "Config bonjour_name: " << config_json["bonjour_name"].asString();
+             opts.bonjour_name = config_json["bonjour_name"].asString();
+        }
 
         // Booleans
         if (config_json.isMember("encryption") && config_json["encryption"].isBool()) {
@@ -332,6 +337,8 @@ Options parseOptions(const std::vector<std::string>& args) {
       opts.turns.erase(remove(opts.turns.begin(), opts.turns.end(), '\''), opts.turns.end());
     } else if (arg.find("--vpn=") == 0) { 
         opts.vpn = arg.substr(6);
+    } else if (arg.find("--bonjour_name=") == 0) {
+        opts.bonjour_name = arg.substr(15);
     }
     // Handle flags
     if (arg == "--encryption") {

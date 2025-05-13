@@ -89,6 +89,11 @@
 
 #include "modules/third_party/whillats/src/whillats.h"
 
+// Include TargetConditionals for TARGET_OS_IOS or TARGET_OS_OSX macros
+#if defined(__APPLE__)
+    #include <TargetConditionals.h>
+#endif
+
 #include "option.h"
 
 #ifdef WEBRTC_SPEECH_DEVICES
@@ -96,10 +101,14 @@
 #endif  // WEBRTC_SPEECH_DEVICES
 
 // Inject Obj-C forward declarations only:
-#if defined(WEBRTC_IOS) && defined(__OBJC__)
+#if TARGET_OS_IOS && defined(__OBJC__)
 #import "sdk/objc/base/RTCVideoCapturer.h"
 #import "sdk/objc/components/renderer/metal/RTCMTLVideoView.h"
 #endif
+
+#if TARGET_OS_IOS || TARGET_OS_OSX
+#include "bonjour.h"
+#endif // #if TARGET_OS_IOS || TARGET_OS_OSX
 
 // Only include the C++ API for C++ consumers
 #ifdef __cplusplus

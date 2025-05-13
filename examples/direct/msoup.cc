@@ -845,7 +845,7 @@ void MediaSoupWrapper::async_read() {
                         sizeof(buffer) - total_bytes_read - 1, 0);
       APP_LOG(AS_INFO) << "async_read: recv attempt " << attempts
                        << ", bytes_read: " << bytes_read;
-      if (bytes_read <= 0) {
+      if (bytes_read < 0) {
         if (bytes_read < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
           APP_LOG(AS_INFO) << "async_read: EAGAIN/EWOULDBLOCK, retrying";
           no_more_data = true;
