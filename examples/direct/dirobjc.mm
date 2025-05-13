@@ -121,7 +121,7 @@ static void DNSSD_API resolve_callback(
     BonjourDiscoveryContext* ctx = static_cast<BonjourDiscoveryContext*>(context);
     if (errorCode == kDNSServiceErr_NoError) {
         // Resolve hosttarget to IP
-        struct addrinfo hints = {0}, *res = nullptr;
+        struct addrinfo hints = {0,0,0,0,0,0,0,0}, *res = nullptr;
         hints.ai_family = AF_INET;
         if (getaddrinfo(hosttarget, nullptr, &hints, &res) == 0 && res) {
             char ipstr[INET_ADDRSTRLEN] = {0};
