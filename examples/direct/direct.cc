@@ -75,33 +75,21 @@ void DirectApplication::Cleanup() {
   // Remove sink before closing the connection
   if (video_track_ && video_sink_) {
       RTC_LOG(LS_INFO) << "Removing video sink.";
-      // Assuming video_track_ is accessed/modified only on signaling thread after creation
       video_track_->RemoveSink(video_sink_.get());
       video_sink_ = nullptr;
   }
 
-  // Reset factory on signaling thread before stopping threads
-  if (signaling_thread()->IsCurrent()) { // Avoid blocking call if already on signaling thread
-       if (peer_connection_factory_) {
-           peer_connection_factory_ = nullptr;
-       }
+  // Explicitly release PeerConnectionFactory and ADM references on the worker thread before stopping threads
+  if (worker_thread()->IsCurrent()) {
+      peer_connection_factory_ = nullptr;
+      dependencies_.adm = nullptr;
+      audio_device_module_ = nullptr;
   } else {
-      signaling_thread()->BlockingCall([this]() {
-          if (peer_connection_factory_) {
-              peer_connection_factory_ = nullptr;
-          }
+      worker_thread()->BlockingCall([this]() {
+          peer_connection_factory_ = nullptr;
+          dependencies_.adm = nullptr;
+          audio_device_module_ = nullptr;
       });
-  }
-
-  // Explicitly release the ADM reference on the worker thread before stopping threads
-  if (worker_thread()->IsCurrent()) { // Avoid blocking call if already on worker thread
-      dependencies_.adm = nullptr; 
-      audio_device_module_ = nullptr; // Also release the direct member ref
-  } else {
-     worker_thread()->BlockingCall([this]() {
-         dependencies_.adm = nullptr;
-         audio_device_module_ = nullptr; // Also release the direct member ref
-     });
   }
 
   if (rtc::Thread::Current() != main_thread_.get()) {
@@ -280,7 +268,6 @@ bool DirectApplication::CreatePeerConnection() {
       peer_connection_->Close();
       peer_connection_ = nullptr;
     }
-    peer_connection_factory_ = nullptr;
 
   // Create/get certificate if needed
   if (opts_.encryption && !certificate_) {
@@ -333,27 +320,30 @@ bool DirectApplication::CreatePeerConnection() {
   }
 #endif // WEBRTC_SPEECH_DEVICES
 
+  // Create the audio device module on the worker thread so its lifecycle runs there.
   rtc::Event adm_created;
-  audio_device_module_ = nullptr;
   dependencies_.worker_thread->PostTask([this, kAudioDeviceModuleType, task_queue_factory_ptr, &adm_created]() {
-      audio_device_module_ = webrtc::AudioDeviceModule::Create(
+    // Reset PCF and ADM references on worker thread for correct destruction.
+    peer_connection_factory_ = nullptr;
+    dependencies_.adm = nullptr;
+    audio_device_module_ = nullptr;
+    audio_device_module_ = webrtc::AudioDeviceModule::Create(
         kAudioDeviceModuleType,
-        task_queue_factory_ptr
-      );
-      if (audio_device_module_) {
-          RTC_LOG(LS_INFO) << "Audio device module created successfully on thread: " << rtc::Thread::Current();
-          // No need to call Init() here; CreatePeerConnectionFactory will do it
-      } else {
-          RTC_LOG(LS_ERROR) << "Failed to create audio device module";
-      }
-      adm_created.Set();
+        task_queue_factory_ptr);
+    if (audio_device_module_) {
+      RTC_LOG(LS_INFO) << "Audio device module created successfully on thread: "
+                       << rtc::Thread::Current();
+    } else {
+      RTC_LOG(LS_ERROR) << "Failed to create audio device module";
+    }
+    adm_created.Set();
   });
 
-  // Wait for ADM creation to complete
+  // Wait for ADM creation to complete on the worker thread.
   adm_created.Wait(webrtc::TimeDelta::Seconds(1));
   if (!audio_device_module_) {
-      RTC_LOG(LS_ERROR) << "Audio device module creation failed after task execution";
-      return false;
+    RTC_LOG(LS_ERROR) << "Audio device module creation failed after task execution";
+    return false;
   }
 
   dependencies_.adm = audio_device_module_;
@@ -367,17 +357,17 @@ bool DirectApplication::CreatePeerConnection() {
       dependencies_.adm,
       webrtc::CreateBuiltinAudioEncoderFactory(),
       webrtc::CreateBuiltinAudioDecoderFactory(),
-      // Pass nullptr for video factories to use internal defaults
-      opts_.video ? std::make_unique<webrtc::VideoEncoderFactoryTemplate<
+      // Provide template-based video encoder and decoder factories
+      std::make_unique<webrtc::VideoEncoderFactoryTemplate<
           webrtc::LibvpxVp8EncoderTemplateAdapter,
           webrtc::LibvpxVp9EncoderTemplateAdapter,
           webrtc::OpenH264EncoderTemplateAdapter,
-          webrtc::LibaomAv1EncoderTemplateAdapter>>() : nullptr,
-      opts_.video ? std::make_unique<webrtc::VideoDecoderFactoryTemplate<
+          webrtc::LibaomAv1EncoderTemplateAdapter>>(),
+      std::make_unique<webrtc::VideoDecoderFactoryTemplate<
           webrtc::LibvpxVp8DecoderTemplateAdapter,
           webrtc::LibvpxVp9DecoderTemplateAdapter,
           webrtc::OpenH264DecoderTemplateAdapter,
-          webrtc::Dav1dDecoderTemplateAdapter>>() : nullptr,      
+          webrtc::Dav1dDecoderTemplateAdapter>>(),      
       nullptr, // audio_mixer
       nullptr  // audio_processing
   );
