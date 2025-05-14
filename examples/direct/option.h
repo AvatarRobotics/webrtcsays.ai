@@ -33,8 +33,6 @@
 #include <sys/socket.h>
 #include <netinet/tcp.h>
 
-#include "rtc_base/ssl_certificate.h"
-
 #ifndef DIRECT_EXPORT_H
 #define DIRECT_EXPORT_H
 
@@ -74,33 +72,34 @@ enum LoggingSeverity {
 
 // Command line options
 struct Options {
-    std::string mode = "caller"; // default to caller if not specified
+    std::string mode{}; // default to empty, set in parseOptions
     bool encryption = true;
     bool whisper = true;
     bool llama = true;
     bool video = false;
     bool help = false;
-    std::string help_string;
-    std::string config_path = ""; // Path to JSON config file
-    std::string whisper_model;
-    std::string llama_model;
-    std::string llava_mmproj;
-    std::string webrtc_cert_path = "cert.pem";
-    std::string webrtc_key_path = "key.pem";
-    std::string webrtc_speech_initial_playout_wav = "play.wav";
-    std::string llama_llava_yuv = "test.yuv";
+    std::string help_string{};
+    std::string config_path{}; // Path to JSON config file
+    std::string whisper_model{};
+    std::string llama_model{};
+    std::string llava_mmproj{};
+    std::string webrtc_cert_path{};
+    std::string webrtc_key_path{};
+    std::string webrtc_speech_initial_playout_wav{};
+    std::string llama_llava_yuv{};
     int llama_llava_yuv_width = 300;
     int llama_llava_yuv_height = 300;
-    std::string address = "";
-    std::string turns = "";
-    std::string vpn = "";
+    std::string address{};
+    std::string turns{};
+    std::string vpn{};
+    std::string bonjour_name{}; // Name for Bonjour advertisement/discovery
 };
 
 // Function to parse command line string to above options
 DIRECT_API Options parseOptions(const char* argString);
 Options parseOptions(const std::vector<std::string>& args);
 
-bool ParseIpAndPort(const std::string& ip_port, std::string& ip, int& port);
+bool DIRECT_API ParseIpAndPort(const std::string& ip_port, std::string& ip, int& port);
 
 // Function to get command line options to a string, to print or speak
 DIRECT_API std::string getUsage(const Options opts);
@@ -108,18 +107,13 @@ DIRECT_API std::string getUsage(const Options opts);
 DIRECT_API void DirectSetLoggingLevel(LoggingSeverity level);
 
 DIRECT_API rtc::scoped_refptr<rtc::RTCCertificate> DirectLoadCertificateFromEnv(Options opts);
-
 DIRECT_API uint32_t DirectCreateRandomId();
-
 DIRECT_API std::string DirectCreateRandomUuid();
-
 DIRECT_API void DirectThreadSetName(rtc::Thread* thread, const char* name);
-
 DIRECT_API webrtc::IceCandidateInterface* DirectCreateIceCandidate(const char* sdp_mid,
     int sdp_mline_index,
     const char* sdp,
     webrtc::SdpParseError* error);
-
 DIRECT_API std::unique_ptr<webrtc::SessionDescriptionInterface> DirectCreateSessionDescription(
     webrtc::SdpType type,
     const char* sdp,

@@ -24,9 +24,9 @@
 
 #include "direct.h"
 
-// Function to parse IP address and port from a string in the format "IP:PORT"
-// From option.cc
-bool ParseIpAndPort(const std::string& ip_port, std::string& ip, int& port);
+#if TARGET_OS_IOS || TARGET_OS_OSX
+#include "bonjour.h"
+#endif // #if TARGET_OS_IOS || TARGET_OS_OSX
 
 // DirectCallee Implementation
 DirectCallee::DirectCallee(Options opts) : DirectPeer(opts) {
@@ -69,6 +69,12 @@ bool DirectCallee::StartListening() {
       return false;
     }
 
+    // Retrieve the actual port assigned by the OS if port was 0
+    socklen_t addrlen = sizeof(addr);
+    if (getsockname(raw_socket, (struct sockaddr*)&addr, &addrlen) == 0) {
+        local_port_ = ntohs(addr.sin_port);
+    }
+
     // Listen
     if (::listen(raw_socket, 5) < 0) {
       RTC_LOG(LS_ERROR) << "Failed to listen, errno: " << strerror(errno);
@@ -90,6 +96,17 @@ bool DirectCallee::StartListening() {
                                                 &DirectCallee::OnNewConnection);
 
     RTC_LOG(LS_INFO) << "Server listening on port " << local_port_;
+
+    #if TARGET_OS_IOS || TARGET_OS_OSX
+    // Bonjour advertisement
+    if (!opts_.bonjour_name.empty()) {
+        if (AdvertiseBonjourService(opts_.bonjour_name, local_port_)) {
+            RTC_LOG(LS_INFO) << "Bonjour advertised as '" << opts_.bonjour_name << "' on port " << local_port_;
+        } else {
+            RTC_LOG(LS_WARNING) << "Bonjour advertisement failed for '" << opts_.bonjour_name << "'";
+        }
+    }
+    #endif // #if TARGET_OS_IOS || TARGET_OS_OSX
     return true;
   };
   // If already on network thread, run directly to avoid BlockingCall DCHECK
