@@ -1304,7 +1304,7 @@ bool MediaSoupWrapper::produce_audio(const std::string& transportId,
 
   Json::Value codec;
   codec["mimeType"] = "audio/opus";
-  codec["payloadType"] = 100;
+  codec["payloadType"] = 111;
   codec["clockRate"] = 48000;
   codec["channels"] = 2;
   codec["parameters"]["minptime"] = 10;
@@ -1313,7 +1313,12 @@ bool MediaSoupWrapper::produce_audio(const std::string& transportId,
 
   Json::Value encoding;
   encoding["dtx"] = false;
-  encoding["ssrc"] = send_ssrc;  // Your sending SSRC
+  if (send_ssrc != 0) {
+    encoding["ssrc"] = send_ssrc;
+    APP_LOG(AS_INFO) << "MediaSoupWrapper::produce_audio - Explicitly setting SSRC in produce request: " << send_ssrc;
+  } else {
+    APP_LOG(AS_INFO) << "MediaSoupWrapper::produce_audio - Not setting SSRC in produce request (will be auto-detected by mediasoup).";
+  }
   rtpParams["encodings"].append(encoding);
 
   // Add header extensions
