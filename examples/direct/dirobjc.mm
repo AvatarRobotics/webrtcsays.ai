@@ -53,44 +53,229 @@ void DirectApplication::SetVideoRenderer(RTCMTLVideoView* renderer) {
 #include <chrono>
 #include <atomic>
 #include <mutex>
+#include <iostream>
 #include <condition_variable>
 #include <netinet/in.h>
+#include <net/if.h>
 #include <arpa/inet.h>
-#include <string.h>
-#include <iostream>
 #include <netdb.h>
+#include <ifaddrs.h>
+#include <string>
 
 // Global handle for advertisement (for simplicity, only one at a time)
 static DNSServiceRef g_advert_ref = nullptr;
+
+// Struct to hold IP address and Wi-Fi flag
+struct IPAddressResult {
+    std::string ip;
+    bool isWiFi;
+};
+
+IPAddressResult GetLocalIPAddress() {
+    struct ifaddrs *ifaddr, *ifa;
+    char ip[INET_ADDRSTRLEN] = {0};
+    bool isWiFi = false;
+
+    if (getifaddrs(&ifaddr) == -1) {
+        std::cerr << "getifaddrs failed: " << strerror(errno) << std::endl;
+        return {"", false};
+    }
+
+    // Debug: Log all interfaces
+    std::cout << "Available interfaces:" << std::endl;
+    for (ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == nullptr) continue;
+        if (ifa->ifa_addr->sa_family == AF_INET) {
+            inet_ntop(AF_INET, &((struct sockaddr_in *)ifa->ifa_addr)->sin_addr, ip, INET_ADDRSTRLEN);
+            std::cout << "Interface: " << ifa->ifa_name << ", IP: " << ip
+                      << ", Flags: " << (ifa->ifa_flags & IFF_LOOPBACK ? "LOOPBACK" : "")
+                      << (ifa->ifa_flags & IFF_UP ? "UP" : "") << std::endl;
+            ip[0] = '\0';
+        }
+    }
+
+    // First pass: Look for en0 (Wi-Fi)
+    for (ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == nullptr) continue;
+        if (ifa->ifa_addr->sa_family == AF_INET &&
+            !(ifa->ifa_flags & IFF_LOOPBACK) &&
+            (ifa->ifa_flags & IFF_UP) &&
+            strcmp(ifa->ifa_name, "en0") == 0) {
+            struct sockaddr_in *sin = (struct sockaddr_in *)ifa->ifa_addr;
+            inet_ntop(AF_INET, &sin->sin_addr, ip, INET_ADDRSTRLEN);
+            isWiFi = true;
+            std::cout << "Selected interface: " << ifa->ifa_name << ", IP: " << ip << " (Wi-Fi)" << std::endl;
+            break;
+        }
+    }
+
+    // Second pass: Fallback to any non-loopback, active interface
+    if (ip[0] == '\0') {
+        for (ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
+            if (ifa->ifa_addr == nullptr) continue;
+            if (ifa->ifa_addr->sa_family == AF_INET &&
+                !(ifa->ifa_flags & IFF_LOOPBACK) &&
+                (ifa->ifa_flags & IFF_UP)) {
+                struct sockaddr_in *sin = (struct sockaddr_in *)ifa->ifa_addr;
+                inet_ntop(AF_INET, &sin->sin_addr, ip, INET_ADDRSTRLEN);
+                isWiFi = false;
+                std::cout << "Selected fallback interface: " << ifa->ifa_name << ", IP: " << ip << " (Non-Wi-Fi)" << std::endl;
+                break;
+            }
+        }
+    }
+
+    freeifaddrs(ifaddr);
+    if (ip[0] == '\0') {
+        std::cerr << "No valid IP found (en0 not available, no fallback)" << std::endl;
+    }
+    return {ip, isWiFi};
+}
 
 bool DIRECT_API AdvertiseBonjourService(const std::string& name, int port) {
     if (g_advert_ref) {
         DNSServiceRefDeallocate(g_advert_ref);
         g_advert_ref = nullptr;
     }
-    // Advertise as _webrtcsays._tcp. local.
+
+    // Get the local IP and Wi-Fi flag
+    IPAddressResult ipResult = GetLocalIPAddress();
+    if (ipResult.ip.empty()) {
+        std::cerr << "Failed to retrieve a valid IP address for Bonjour advertising" << std::endl;
+        return false;
+    }
+
+    // Require Wi-Fi for Bonjour
+    if (!ipResult.isWiFi) {
+        std::cerr << "Not on Wi-Fi (interface is not en0), skipping Bonjour advertising" << std::endl;
+        return false;
+    }
+
+    // Sanitize service name
+    std::string service_name = name;
+    // Remove invalid characters (keep alphanumeric, hyphen, underscore)
+    for (char& c : service_name) {
+        if (!std::isalnum(c) && c != '-' && c != '_') {
+            c = '_';
+        }
+    }
+    // Trim to 63 bytes (Bonjour limit)
+    if (service_name.length() > 63) {
+        service_name = service_name.substr(0, 63);
+    }
+    // Fallback if empty or invalid
+    if (service_name.empty()) {
+        std::cerr << "Service name is empty or invalid after sanitization" << std::endl;
+        return false;
+    }
+
+    // Get system hostname
+    char sys_hostname[256];
+    if (gethostname(sys_hostname, sizeof(sys_hostname)) != 0) {
+        std::cerr << "gethostname failed: " << strerror(errno) << std::endl;
+        sys_hostname[0] = '\0';
+    }
+
+    // Generate a unique .local hostname
+    std::string hostname;
+    std::string base_hostname = service_name; // Use service name as base (e.g., "RobotPhone")
+    // Convert to lowercase and replace spaces/underscores for mDNS compatibility
+    for (char& c : base_hostname) {
+        if (c == ' ' || c == '_') {
+            c = '-';
+        } else {
+            c = std::tolower(c);
+        }
+    }
+    // Trim to 63 characters (mDNS hostname limit without .local)
+    if (base_hostname.length() > 63) {
+        base_hostname = base_hostname.substr(0, 63);
+    }
+    hostname = base_hostname + ".local"; // Append .local (e.g., "robotphone.local")
+
+    // Validate system hostname and override if invalid
+    std::string sys_hostname_str(sys_hostname);
+    if (sys_hostname_str.empty() || sys_hostname_str == "localhost" || 
+        sys_hostname_str.find(".local") == std::string::npos) {
+        std::cout << "Invalid system hostname: " << (sys_hostname_str.empty() ? "empty" : sys_hostname_str) 
+                  << ", using generated hostname: " << hostname << std::endl;
+    } else {
+        // Use system hostname if valid and ends with .local
+        hostname = sys_hostname_str;
+        if (hostname.find(".local") == std::string::npos) {
+            hostname += ".local";
+        }
+    }
+
+    // Create TXT record with IP
+    std::string txt_record = "ip=" + ipResult.ip;
+    unsigned char txt_buffer[256] = {0};
+    uint16_t txt_len = 0;
+    if (!txt_record.empty()) {
+        size_t len = txt_record.length();
+        if (len < 255) {
+            txt_buffer[0] = static_cast<unsigned char>(len);
+            memcpy(txt_buffer + 1, txt_record.c_str(), len);
+            txt_len = len + 1;
+        } else {
+            std::cerr << "TXT record too long: " << txt_record << std::endl;
+            txt_len = 0;
+        }
+    }
+
+    // Log parameters for debugging
+    std::cout << "Registering Bonjour service:" << std::endl;
+    std::cout << "  Name: " << service_name << std::endl;
+    std::cout << "  Type: _webrtcsays._tcp" << std::endl;
+    std::cout << "  Port: " << port << std::endl;
+    std::cout << "  Host: " << hostname << std::endl;
+    std::cout << "  TXT: " << (txt_len ? txt_record : "none") << std::endl;
+
+    // Advertise as _webrtcsays._tcp.local.
     DNSServiceErrorType err = DNSServiceRegister(
         &g_advert_ref,
         0, // flags
         0, // interface index (0 = all)
-        name.c_str(), // service name
-        "_webrtcsays._tcp", // service type
+        service_name.c_str(),
+        "_webrtcsays._tcp",
         nullptr, // domain (default local)
-        nullptr, // host (default)
-        htons(port), // port in network byte order
-        0, // txtLen
-        nullptr, // txtRecord
+        hostname.c_str(),
+        htons(port),
+        txt_len,
+        txt_len ? txt_buffer : nullptr,
         nullptr, // callback
         nullptr  // context
     );
+
     if (err != kDNSServiceErr_NoError) {
-        std::cerr << "Bonjour advertise failed: " << err << std::endl;
+        std::cerr << "Bonjour advertise failed: " << err;
+        switch (err) {
+            case kDNSServiceErr_BadParam:
+                std::cerr << " (Bad parameter)";
+                break;
+            case kDNSServiceErr_NameConflict:
+                std::cerr << " (Name conflict)";
+                break;
+            case kDNSServiceErr_NoMemory:
+                std::cerr << " (Out of memory)";
+                break;
+            default:
+                std::cerr << " (Unknown error)";
+                break;
+        }
+        std::cerr << std::endl;
+        std::cerr << "Parameters: Name=" << service_name << ", Type=_webrtcsays._tcp, Port=" << port
+                  << ", Host=" << hostname << ", TXT=" << (txt_len ? txt_record : "none") << std::endl;
         return false;
     }
+
+    std::cout << "Bonjour advertised as '" << service_name << "' on port " << port << std::endl;
+    std::cout << " Advertising on IP: " << ipResult.ip << " (" << (ipResult.isWiFi ? "Wi-Fi" : "Non-Wi-Fi") << ")" << std::endl;
+
     // Run the service in a background thread
     std::thread([]{
         if (g_advert_ref) {
-            DNSServiceProcessResult(g_advert_ref); // This blocks
+            DNSServiceProcessResult(g_advert_ref);
         }
     }).detach();
     return true;
