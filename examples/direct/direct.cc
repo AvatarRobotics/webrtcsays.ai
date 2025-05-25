@@ -268,25 +268,25 @@ bool DirectApplication::Initialize() {
   // of components – this can be refined later if advanced audio features are
   // needed.
   // -------------------------------------------------------------------
-  if (!peer_connection_factory_) {
-    dependencies_.network_thread = network_thread();
-    dependencies_.worker_thread = worker_thread();
-    dependencies_.signaling_thread = signaling_thread();
+  // if (!peer_connection_factory_) {
+  //   dependencies_.network_thread = network_thread();
+  //   dependencies_.worker_thread = worker_thread();
+  //   dependencies_.signaling_thread = signaling_thread();
 
-    peer_connection_factory_ = webrtc::CreatePeerConnectionFactory(
-        dependencies_.network_thread,
-        dependencies_.worker_thread,
-        dependencies_.signaling_thread,
-        /*default adm*/ nullptr,
-        webrtc::CreateBuiltinAudioEncoderFactory(),
-        webrtc::CreateBuiltinAudioDecoderFactory(),
-        nullptr, nullptr, nullptr, nullptr);
+  //   peer_connection_factory_ = webrtc::CreatePeerConnectionFactory(
+  //       dependencies_.network_thread,
+  //       dependencies_.worker_thread,
+  //       dependencies_.signaling_thread,
+  //       /*default adm*/ nullptr,
+  //       webrtc::CreateBuiltinAudioEncoderFactory(),
+  //       webrtc::CreateBuiltinAudioDecoderFactory(),
+  //       nullptr, nullptr, nullptr, nullptr);
 
-    if (!peer_connection_factory_) {
-      RTC_LOG(LS_ERROR) << "Failed to create PeerConnectionFactory";
-      return false;
-    }
-  }
+  //   if (!peer_connection_factory_) {
+  //     RTC_LOG(LS_ERROR) << "Failed to create PeerConnectionFactory";
+  //     return false;
+  //   }
+  // }
 
   return true;
 }
@@ -330,14 +330,15 @@ bool DirectApplication::CreatePeerConnection() {
   dependencies_.signaling_thread = signaling_thread();
 
   // Audio device module type
+#ifndef WEBRTC_SPEECH_DEVICES
   webrtc::AudioDeviceModule::AudioLayer kAudioDeviceModuleType = webrtc::AudioDeviceModule::kPlatformDefaultAudio;
-#ifdef WEBRTC_SPEECH_DEVICES
-
+#else
+  webrtc::AudioDeviceModule::AudioLayer kAudioDeviceModuleType = webrtc::AudioDeviceModule::kSpeechAudio;
   if (opts_.llama) {
     webrtc::SpeechAudioDeviceFactory::SetLlamaEnabled(true);
     webrtc::SpeechAudioDeviceFactory::SetLlamaModelFilename(opts_.llama_model);
     webrtc::SpeechAudioDeviceFactory::SetLlavaMMProjFilename(opts_.llava_mmproj);
-    llama_ = nullptr; // uncomment to send message instead of audio 
+    //llama_ = nullptr; // uncomment to send message instead of audio 
     //webrtc::SpeechAudioDeviceFactory::CreateWhillatsLlama(llamaCallback_);
   } 
 
