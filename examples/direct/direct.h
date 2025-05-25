@@ -318,8 +318,6 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
   // Track all sockets created by WrapSocket or CreateSocket
   std::vector<rtc::Socket*> tracked_sockets_;
 
-  // Whillats TTS
-  WhillatsLlama* llama_;
   WhillatsSetResponseCallback llamaCallback_;
 };
 

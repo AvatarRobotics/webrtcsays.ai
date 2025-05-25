@@ -10,8 +10,6 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include "api/frame_transformer_interface.h"
-#include "api/jsep.h"
 #include "modules/audio_device/include/audio_device.h"  // For AudioDeviceModule
 #include "pc/rtp_receiver.h"  // Needed for RtpReceiverInternal
 #include "rtc_base/crypto_random.h"
@@ -25,8 +23,14 @@
 #include <vector>
 
 #include "absl/strings/string_view.h" // Added for absl::string_view
+#include "absl/strings/match.h"      // For absl::EqualsIgnoreCase
 #include "api/audio_codecs/audio_decoder_factory.h"
 #include "api/audio_codecs/audio_encoder_factory.h"
+#include "api/rtp_parameters.h"      // For RtpCodecCapability
+#include <regex>
+#include <string>
+#include <sstream>
+#include <algorithm>
 
 // Define an AudioSink class near the top of room.cc
 class AudioSink : public webrtc::AudioTrackSinkInterface {
@@ -540,6 +544,12 @@ void RoomCaller::HandleNewConsumer(const Json::Value& data) {
       consumer_ssrc_map_[consumer_id] = consumer_ssrc;
     }
     AddAudioSinkToPeerConnection();  // Safe to call from signaling thread
+
+    // A new consumer means the set of SSRCs (and therefore the remote SDP)
+    // has changed.  Clear the flag so that MaybeSetFinalRemoteDescription()
+    // will build and apply an updated SDP that includes the fresh SSRC.
+    remote_description_set_.store(false);
+    MaybeSetFinalRemoteDescription();
   });
 
   // // Add ICE candidates
@@ -806,7 +816,7 @@ void RoomCaller::HandleProducerTransportCreated(const Json::Value& data) {
     return;
   }
   // Use the DTLS parameters provided by the server
-  Json::Value dtls_params = pending_producer_data_["dtlsParameters"];
+  Json::Value dtls_params = GetDtlsParameters();
   APP_LOG(AS_INFO) << "Sending producer transport connect request";
   wss_->connect_transport(false, wss_->producer_transport_id_, dtls_params);
 }
@@ -854,7 +864,9 @@ void RoomCaller::HandleConsumerTransportCreated(const Json::Value& data) {
         << "Missing required DTLS parameters for consumer transport";
     return;
   }
-  Json::Value dtls_params_consumer = pending_consumer_data_["dtlsParameters"];
+  // Same as for the producer-side: announce the fingerprint of the certificate
+  // we will actually present in the DTLS handshake.
+  Json::Value dtls_params_consumer = GetDtlsParameters();
   APP_LOG(AS_INFO) << "Sending consumer transport connect request";
   wss_->connect_transport(true, wss_->consumer_transport_id_, dtls_params_consumer);
 }
@@ -899,9 +911,18 @@ void RoomCaller::StartSdpNegotiation() {
     // Initialize audio playout on worker thread
     if (audio_device_module_) {
       worker_thread()->PostTask([this]() {
+        // Initialize both playout *and* recording so that we actually capture
+        // microphone samples to send to mediasoup (otherwise we end up
+        // sending silent Opus frames and consequently receive silence when
+        // the server relays our own audio back).
         audio_device_module_->InitPlayout();
         audio_device_module_->StartPlayout();
-        APP_LOG(AS_INFO) << "Audio playout started";
+
+        audio_device_module_->InitRecording();
+        audio_device_module_->SetStereoRecording(true); // Force stereo recording
+        audio_device_module_->StartRecording();
+
+        APP_LOG(AS_INFO) << "Audio playout + recording started";
       });
     }
   } else {
@@ -943,6 +964,10 @@ void RoomCaller::StartSdpNegotiation() {
   // if(!creating_initial_offer) {
   //  Add audio track and configure codec preferences
   cricket::AudioOptions audio_options;
+  // NOTE: cricket::AudioOptions no longer contains a 'stereo' field in this
+  // WebRTC revision.  Capturing remains mono; mediasoup happily accepts it
+  // as long as the channel count signalled in the Opus fmtp matches (we
+  // advertise two channels but the encoder will duplicate the mono signal).
 
   auto audio_source =
       peer_connection_factory_->CreateAudioSource(audio_options);
@@ -971,6 +996,43 @@ void RoomCaller::StartSdpNegotiation() {
                       << result.error().message();
     sdp_negotiation_started_ = false;
     return;
+  }
+
+  // --- Force Opus codec to use payload-type 100 so that the PT in our local
+  // --- offer matches the PT announced by mediasoup (and carried in all RTP
+  // --- packets that the server will actually send).
+  {
+    webrtc::RtpTransceiverInterface* transceiver = result.value().get();
+    if (transceiver) {
+      auto sender_caps =
+          peer_connection_factory_->GetRtpSenderCapabilities(
+              cricket::MediaType::MEDIA_TYPE_AUDIO);
+
+      std::vector<webrtc::RtpCodecCapability> opus_only;
+      for (auto cap : sender_caps.codecs) {
+        if (absl::EqualsIgnoreCase(cap.name, "opus")) {
+          cap.preferred_payload_type = 100;  // mediasoup uses 100
+          opus_only.push_back(cap);
+          break;
+        }
+      }
+
+      if (!opus_only.empty()) {
+        webrtc::RTCError err = transceiver->SetCodecPreferences(opus_only);
+        if (!err.ok()) {
+          APP_LOG(AS_WARNING)
+              << "Failed to set Opus codec preference (PT 100): "
+              << err.message();
+        } else {
+          APP_LOG(AS_INFO)
+              << "Set Opus codec preference with payload-type 100 for audio "
+                 "transceiver";
+        }
+      } else {
+        APP_LOG(AS_WARNING)
+            << "Could not find Opus codec capability to set PT 100";
+      }
+    }
   }
 
   APP_LOG(AS_INFO) << "Successfully added audio transceiver";
@@ -1008,18 +1070,65 @@ void RoomCaller::StartSdpNegotiation() {
         std::string sdp;
         desc->ToString(&sdp);
 
-        // Store local offer for later use
+        // --- mediasoup uses a fixed mapping for RTP header-extension IDs.
+        // --- Ensure our offer advertises exactly the same numeric IDs so
+        // --- that the packets we subsequently send are accepted by the
+        // --- router.  The required mapping for *audio* is:
+        // +  urn:ietf:params:rtp-hdrext:sdes:mid            -> id 1
+        // +  http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time -> id 4
+        // +  http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01 -> id 5
+        // +  urn:ietf:params:rtp-hdrext:ssrc-audio-level    -> id 10
+        auto patch_extmap = [](std::string& offer) {
+          auto replace_line = [&offer](const std::string& from,
+                                       const std::string& to) {
+            size_t pos = offer.find(from);
+            if (pos != std::string::npos)
+              offer.replace(pos, from.size(), to);
+          };
+
+          replace_line("a=extmap:4 urn:ietf:params:rtp-hdrext:sdes:mid",
+                       "a=extmap:1 urn:ietf:params:rtp-hdrext:sdes:mid");
+
+          replace_line("a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level",
+                       "a=extmap:10 urn:ietf:params:rtp-hdrext:ssrc-audio-level");
+
+          replace_line("a=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
+                       "a=extmap:4 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
+
+          replace_line("a=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01",
+                       "a=extmap:5 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
+
+          // --- Ensure Opus is advertised on payload-type 100 (mediasoup default)
+          replace_line("m=audio 9 UDP/TLS/RTP/SAVPF 111",
+                       "m=audio 9 UDP/TLS/RTP/SAVPF 100");
+          replace_line("a=rtpmap:111 opus/", "a=rtpmap:100 opus/");
+          replace_line("a=rtcp-fb:111 ", "a=rtcp-fb:100 ");
+          replace_line("a=fmtp:111 ", "a=fmtp:100 ");
+        };
+
+        patch_extmap(sdp);
+
+        // Store patched local offer for later use
         local_offer_ = sdp;
 
         APP_LOG(AS_INFO)
-            << "StartSdpNegotiation created local offer successfully: " << sdp;
+            << "StartSdpNegotiation created (and patched) local offer successfully: " << sdp;
+
+        // Re-create SessionDescription from the patched SDP so the
+        // PeerConnection applies the corrected header-extension mapping.
+        webrtc::SdpParseError parse_error;
+        std::unique_ptr<webrtc::SessionDescriptionInterface> patched_desc =
+            DirectCreateSessionDescription(desc->GetType(), sdp.c_str(), &parse_error);
+        if (!patched_desc) {
+          APP_LOG(AS_ERROR) << "Failed to parse patched SDP: " << parse_error.description;
+          return;
+        }
 
         // Set local description
         auto set_local_observer = rtc::make_ref_counted<
             LambdaSetLocalDescriptionObserver>([this](webrtc::RTCError error) {
           if (!error.ok()) {
-            APP_LOG(AS_ERROR)
-                << "Failed to set local description: " << error.message();
+            APP_LOG(AS_ERROR) << "Failed to set local description: " << error.message();
             return;
           }
 
@@ -1048,8 +1157,8 @@ void RoomCaller::StartSdpNegotiation() {
           }
         });
 
-        // Set local description now that offer is created
-        peer_connection_->SetLocalDescription(std::move(desc), set_local_observer);
+        // Set local description with patched offer
+        peer_connection_->SetLocalDescription(std::move(patched_desc), set_local_observer);
       });
 
   // Create the initial or final offer
@@ -1187,7 +1296,41 @@ std::string RoomCaller::BuildRemoteSdpBasedOnLocalOffer(
   std::transform(producer_algorithm.begin(), producer_algorithm.end(),
                  producer_algorithm.begin(), ::tolower);
 
-  sdp << "m=audio 9 UDP/TLS/RTP/SAVPF 100\r\n"
+  // -------------------------------------------------------------
+  // Choose the Opus payload-type that mediasoup tells us to use.
+  // The value lives in the first codec entry inside the consumer's
+  // RTP parameters (e.g. "payloadType": 100).  Using a PT that
+  // differs from the one mediasoup will actually send leads to all
+  // RTP packets being discarded – resulting in *silence*.
+  //
+  // If we do not yet have consumer RTP parameters (e.g. when building
+  // the very first provisional offer) fall back to the PT that
+  // appears in our own local offer so that negotiation can still move
+  // forward.  This branch will be corrected later, once the consumer
+  // info arrives and SetCombinedSdp() is called again.
+  // -------------------------------------------------------------
+  int opus_pt = 111;  // sensible default
+
+  if (!consumer_rtp_parameters.isNull() && consumer_rtp_parameters.isMember("codecs") &&
+      consumer_rtp_parameters["codecs"].isArray() && !consumer_rtp_parameters["codecs"].empty()) {
+    opus_pt = consumer_rtp_parameters["codecs"][0]["payloadType"].asInt();
+    APP_LOG(AS_INFO) << "Using Opus PT from consumer RTP parameters: " << opus_pt;
+  } else {
+    // Fallback: extract the PT we used in the local offer.
+    std::smatch m;
+    std::regex re("a=rtpmap:(\\d+) opus/");
+    std::stringstream ss(local_offer);
+    std::string line;
+    while (std::getline(ss, line)) {
+      if (std::regex_search(line, m, re)) {
+        opus_pt = std::stoi(m[1]);
+        APP_LOG(AS_INFO) << "Using Opus PT from local offer: " << opus_pt;
+        break;
+      }
+    }
+  }
+
+  sdp << "m=audio 9 UDP/TLS/RTP/SAVPF " << opus_pt << "\r\n"
       << "c=IN IP4 0.0.0.0\r\n"
       << "a=rtcp:9 IN IP4 0.0.0.0\r\n"
       << "a=ice-ufrag:" << producer_ufrag << "\r\n"
@@ -1198,10 +1341,14 @@ std::string RoomCaller::BuildRemoteSdpBasedOnLocalOffer(
       << "a=mid:0\r\n"
       << "a=sendrecv\r\n"
       << "a=rtcp-mux\r\n"
-      << "a=rtpmap:100 opus/48000/2\r\n"
-      << "a=rtcp-fb:100 transport-cc\r\n"
-      << "a=rtcp-fb:100 nack\r\n"
-      << "a=fmtp:100 stereo=1;usedtx=1;useinbandfec=1\r\n";
+      << "a=rtpmap:" << opus_pt << " opus/48000/2\r\n"
+      << "a=rtcp-fb:" << opus_pt << " transport-cc\r\n"
+      << "a=rtcp-fb:" << opus_pt << " nack\r\n"
+      << "a=fmtp:" << opus_pt << " stereo=1;usedtx=1;useinbandfec=1\r\n"
+      << "a=extmap:1 urn:ietf:params:rtp-hdrext:sdes:mid\r\n"
+      << "a=extmap:4 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\n"
+      << "a=extmap:5 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\n"
+      << "a=extmap:10 urn:ietf:params:rtp-hdrext:ssrc-audio-level\r\n";
 
   std::string consumer_ufrag;
   std::string consumer_pwd;
@@ -1209,8 +1356,19 @@ std::string RoomCaller::BuildRemoteSdpBasedOnLocalOffer(
   std::string consumer_fingerprint;
 
   if (!creating_initial_offer && consumer_ssrc) {
-    sdp << "a=ssrc:" << consumer_ssrc
-        << " cname:mediasoup\r\n";  // NOTE: This is the consumer SSRC
+    sdp << "a=ssrc:" << consumer_ssrc << " cname:mediasoup\r\n";
+  }
+
+  sdp << "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n"
+      << "c=IN IP4 0.0.0.0\r\n";
+
+  if (!creating_initial_offer) {
+    // We intentionally do NOT advertise a fixed SSRC for the incoming audio.
+    // Mediasoup may re-create the consumer at any moment (e.g. after the
+    // remote peer reconnects) and pick a brand-new SSRC.  If we pin a value
+    // here, the WebRTC stack will discard every packet that carries an
+    // unexpected SSRC, resulting in silence.  By omitting the "a=ssrc:" line
+    // we allow any SSRC and future re-subscriptions keep working.
 
     // Data Channel (MID 1) - Use consumer transport parameters
     consumer_ufrag =
@@ -1224,16 +1382,6 @@ std::string RoomCaller::BuildRemoteSdpBasedOnLocalOffer(
             .asString();
     std::transform(consumer_algorithm.begin(), consumer_algorithm.end(),
                    consumer_algorithm.begin(), ::tolower);
-  }
-
-  sdp << "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n"
-      << "c=IN IP4 0.0.0.0\r\n";
-
-  if (!creating_initial_offer && consumer_ssrc) {
-    sdp << "a=ice-ufrag:" << consumer_ufrag << "\r\n"
-        << "a=ice-pwd:" << consumer_pwd << "\r\n"
-        << "a=fingerprint:" << consumer_algorithm << " " << consumer_fingerprint
-        << "\r\n";
   }
 
   sdp << "a=setup:passive\r\n"
@@ -1404,7 +1552,19 @@ std::string RoomCaller::BuildRemoteSdpOffer(const Json::Value& consumerData) {
   APP_LOG(AS_INFO) << "Building remote SDP offer for consumer "
                    << consumerData["id"].asString();
 
-  const Json::Value& rtpParameters = consumerData["rtpParameters"];
+  // ------------------------------------------------------------------
+  // Determine which payload-type mediasoup wants us to use for Opus.
+  // Prefer the exact PT contained in the consumer's RTP parameters;
+  // fall back to 111 when that field is missing.
+  // ------------------------------------------------------------------
+  int opus_pt = 111;
+  if (consumerData.isMember("rtpParameters") &&
+      consumerData["rtpParameters"].isMember("codecs") &&
+      !consumerData["rtpParameters"]["codecs"].empty()) {
+    opus_pt = consumerData["rtpParameters"]["codecs"][0]["payloadType"].asInt();
+  }
+
+  //const Json::Value& rtpParameters = consumerData["rtpParameters"];
   if (!consumer_mediasoup_ice_parameters_.isMember("usernameFragment") ||
       !consumer_mediasoup_ice_parameters_.isMember("password")) {
     APP_LOG(AS_ERROR) << "Missing consumer ICE parameters";
@@ -1440,7 +1600,7 @@ std::string RoomCaller::BuildRemoteSdpOffer(const Json::Value& consumerData) {
       << "o=- " << DirectCreateRandomUuid() << " 2 IN IP4 127.0.0.1\r\n"
       << "s=-\r\n"
       << "t=0 0\r\n"
-      << "m=audio 9 UDP/TLS/RTP/SAVPF 100 63 9 0 8 13 110 126\r\n"
+      << "m=audio 9 UDP/TLS/RTP/SAVPF " << opus_pt << "\r\n"
       << "c=IN IP4 0.0.0.0\r\n"
       << "a=rtcp:9 IN IP4 0.0.0.0\r\n"
       << "a=ice-ufrag:"
@@ -1454,17 +1614,12 @@ std::string RoomCaller::BuildRemoteSdpOffer(const Json::Value& consumerData) {
       << "a=sendrecv\r\n"
       << "a=rtcp-mux\r\n"
       << "a=rtcp-rsize\r\n"
-      << "a=rtpmap:100 opus/48000/2\r\n"
-      << "a=rtcp-fb:100 transport-cc\r\n"
-      << "a=rtcp-fb:100 nack\r\n"
-      << "a=fmtp:100 minptime=10;stereo=1;usedtx=1;useinbandfec=1\r\n";
+      << "a=rtpmap:" << opus_pt << " opus/48000/2\r\n"
+      << "a=rtcp-fb:" << opus_pt << " transport-cc\r\n"
+      << "a=rtcp-fb:" << opus_pt << " nack\r\n"
+      << "a=fmtp:" << opus_pt << " minptime=10;stereo=1;usedtx=1;useinbandfec=1\r\n";
 
-  // Add SSRC if available
-  if (rtpParameters.isMember("encodings") &&
-      !rtpParameters["encodings"].empty()) {
-    uint32_t ssrc = rtpParameters["encodings"][0]["ssrc"].asUInt();
-    sdp << "a=ssrc:" << ssrc << " cname:mediasoup\r\n";
-  }
+  // No fixed SSRC – let the router choose.
 
   std::string sdp_str = sdp.str();
   APP_LOG(AS_INFO) << "Built consumer SDP offer:\n" << sdp_str;
@@ -1520,6 +1675,7 @@ void RoomCaller::HandlePeerReconnection() {
 
       if (was_recording) {
         audio_device_module_->InitRecording();
+        audio_device_module_->SetStereoRecording(true); // Force stereo recording
         audio_device_module_->StartRecording();
         APP_LOG(AS_INFO) << "Restarted audio recording";
       }
@@ -1671,30 +1827,33 @@ void RoomCaller::AddIceCandidatesFromMediasoup() {
   }
 
   // Add producer ICE candidates (for sending)
-  for (const auto& candidate : producer_mediasoup_ice_candidates_) {
-    std::string sdp_mid = "0";  // Audio section
-    int sdp_mline_index = 0;
-    std::string candidate_str =
-        "candidate:" + candidate["foundation"].asString() + " 1 " +
-        candidate["protocol"].asString() + " " +
-        std::to_string(candidate["priority"].asUInt()) + " " +
-        candidate["ip"].asString() + " " +
-        std::to_string(candidate["port"].asUInt()) + " typ " +
-        candidate["type"].asString();
-    ReplaceZerosInIceCandidates(candidate_str);
+  if (producer_peer_connection_) {
+    for (const auto& candidate : producer_mediasoup_ice_candidates_) {
+      std::string sdp_mid = "0";  // Audio section
+      int sdp_mline_index = 0;
+      std::string candidate_str =
+          "candidate:" + candidate["foundation"].asString() + " 1 " +
+          candidate["protocol"].asString() + " " +
+          std::to_string(candidate["priority"].asUInt()) + " " +
+          candidate["ip"].asString() + " " +
+          std::to_string(candidate["port"].asUInt()) + " typ " +
+          candidate["type"].asString();
+      ReplaceZerosInIceCandidates(candidate_str);
 
-    webrtc::SdpParseError error;
-    std::unique_ptr<webrtc::IceCandidateInterface> ice_candidate(
-        DirectCreateIceCandidate(sdp_mid.c_str(), 
-        sdp_mline_index, 
-        candidate_str.c_str(),
-        &error));
-    if (ice_candidate) {
-      peer_connection_->AddIceCandidate(ice_candidate.get());
-      APP_LOG(AS_INFO) << "Added producer ICE candidate: " << candidate_str;
-    } else {
-      APP_LOG(AS_ERROR) << "Failed to parse producer ICE candidate: "
-                        << error.description;
+      webrtc::SdpParseError error;
+      std::unique_ptr<webrtc::IceCandidateInterface> ice_candidate(
+          DirectCreateIceCandidate(sdp_mid.c_str(),
+                                   sdp_mline_index,
+                                   candidate_str.c_str(),
+                                   &error));
+
+      if (ice_candidate) {
+        producer_peer_connection_->AddIceCandidate(ice_candidate.get());
+        APP_LOG(AS_INFO) << "Added producer ICE candidate: " << candidate_str;
+      } else {
+        APP_LOG(AS_ERROR) << "Failed to parse producer ICE candidate: "
+                          << error.description;
+      }
     }
   }
 }
@@ -1751,9 +1910,18 @@ void RoomCaller::ProduceAudio() {
     return;
   }
 
+  // Re-use the main (consumer) PeerConnection for sending microphone audio
+  // so that the payload-type and MID negotiated with mediasoup match exactly
+  // what we signal in the upcoming "produce" request.  Using a second,
+  // independent PeerConnection with its own codec preferences caused a
+  // payload-type mismatch (we sent PT=111 while the server expected PT=100)
+  // and consequently no audio reached the room.
+
+  auto* pc = peer_connection_.get();
+
   // State checks
-  if (!peer_connection_) {
-    APP_LOG(AS_ERROR) << "Cannot produce audio: peer connection is null";
+  if (!pc) {
+    APP_LOG(AS_ERROR) << "Cannot produce audio: producer peer connection is null";
     return;
   }
 
@@ -1773,7 +1941,7 @@ void RoomCaller::ProduceAudio() {
     return;
   }
 
-  if (peer_connection_->signaling_state() !=
+  if (pc->signaling_state() !=
       webrtc::PeerConnectionInterface::kStable) {
     APP_LOG(AS_ERROR) << "Cannot produce audio: signaling not stable";
     return;
@@ -1781,10 +1949,10 @@ void RoomCaller::ProduceAudio() {
 
   APP_LOG(AS_INFO) << "Starting audio production. Signaling state: "
                    << webrtc::PeerConnectionInterface::AsString(
-                          peer_connection_->signaling_state());
+                          pc->signaling_state());
 
   // Make sure we have a valid audio transceiver
-  auto transceivers = peer_connection_->GetTransceivers();
+  auto transceivers = pc->GetTransceivers();
   std::string send_mid;
   webrtc::RtpTransceiverInterface* audio_transceiver = nullptr;
 
@@ -1796,9 +1964,57 @@ void RoomCaller::ProduceAudio() {
     }
   }
 
-  if (!audio_transceiver || send_mid.empty()) {
-    APP_LOG(AS_ERROR) << "No audio transceiver found for producing";
-    return;
+  // If the producer PeerConnection does NOT yet have an audio transceiver,
+  // create one that is send-recv with a fresh audio track sourced from the
+  // AudioDeviceModule so that we actually send microphone samples.
+  if (!audio_transceiver) {
+    APP_LOG(AS_INFO)
+        << "Producer PC had no audio transceiver – creating one for sending";
+
+    cricket::AudioOptions audio_options;  // use default (mono capture is fine)
+
+    auto audio_source =
+        peer_connection_factory_->CreateAudioSource(audio_options);
+    if (!audio_source) {
+      APP_LOG(AS_ERROR) << "Failed to create audio source for producer PC";
+      return;
+    }
+
+    std::string audio_track_id = "producer_audiotrack";
+    auto audio_track = peer_connection_factory_->CreateAudioTrack(
+        audio_track_id, audio_source.get());
+    if (!audio_track) {
+      APP_LOG(AS_ERROR) << "Failed to create audio track for producer PC";
+      return;
+    }
+
+    webrtc::RtpTransceiverInit init;
+    init.direction = webrtc::RtpTransceiverDirection::kSendRecv;
+
+    auto result = pc->AddTransceiver(audio_track, init);
+    if (!result.ok()) {
+      APP_LOG(AS_ERROR)
+          << "Failed to add audio transceiver to producer PC: "
+          << result.error().message();
+      return;
+    }
+
+    audio_transceiver = result.value().get();
+    send_mid = audio_transceiver->mid().value_or("");
+  }
+
+  if (send_mid.empty()) {
+    send_mid = audio_transceiver ? audio_transceiver->mid().value_or("") : "";
+  }
+
+  if (send_mid.empty()) {
+    // The MID gets chosen by WebRTC once the transceiver is negotiated.  Use
+    // the well-known value "0" (first m-section) instead of the arbitrary
+    // string "audio" so that the MID signalled to mediasoup matches what we
+    // actually place in the RTP header extension.
+    APP_LOG(AS_WARNING)
+        << "MID not yet assigned; falling back to default value '0'";
+    send_mid = "0";
   }
 
   // Set the transceiver to sendrecv
@@ -1807,7 +2023,7 @@ void RoomCaller::ProduceAudio() {
 
   // Get the sender parameters
   webrtc::RtpSenderInterface* sender = nullptr;
-  auto senders = peer_connection_->GetSenders();
+  auto senders = pc->GetSenders();
   for (auto& s : senders) {
     if (s->track() && s->track()->kind() == "audio") {
       sender = s.get();
@@ -1826,16 +2042,34 @@ void RoomCaller::ProduceAudio() {
     APP_LOG(AS_INFO) << "Audio track enabled for sending";
   }
 
-  // Get the sender parameters
-  uint32_t ssrc = sender->ssrc();
+  // Get the sender parameters – prefer the SSRC reported in the sender's RTP
+  // parameters as that is guaranteed to be the one the stack will really use
+  // on the wire once the transport becomes active.
+  webrtc::RtpParameters params = sender->GetParameters();
+
+  uint32_t ssrc = 0;
+  if (!params.encodings.empty() && params.encodings[0].ssrc.has_value()) {
+    ssrc = params.encodings[0].ssrc.value();
+    APP_LOG(AS_INFO) << "SSRC taken from RtpParameters: " << ssrc;
+  } else {
+    ssrc = sender->ssrc();
+    APP_LOG(AS_INFO) << "SSRC taken from sender->ssrc(): " << ssrc;
+  }
+
   if (ssrc == 0) {
-    APP_LOG(AS_ERROR) << "No SSRC found for audio sender";
+    APP_LOG(AS_ERROR) << "No valid SSRC found for audio sender";
     return;
   }
 
-  producer_ssrc_ = ssrc;
+  producer_ssrc_ = ssrc; // We still store it for local reference if needed
 
-  wss_->produce_audio(wss_->producer_transport_id_, ssrc, send_mid);
+  // Inform mediasoup of the exact SSRC we will use so that the router
+  // can correctly map (and forward) the RTP stream.  Passing 0 forced the
+  // server to assign a random SSRC which did not match the one actually
+  // present in our outgoing packets, resulting in every audio frame being
+  // discarded and therefore complete silence.  Provide the real value so
+  // producer/consumer SSRCs are aligned.
+  wss_->produce_audio(wss_->producer_transport_id_, ssrc /* actual SSRC */, send_mid);
 }
 
 void RoomCaller::HandleProduceResponse(const Json::Value& data) {
@@ -2223,14 +2457,46 @@ void RoomCaller::OnAddTrack(
 
   auto track = receiver->track();
   if (track && track->kind() == webrtc::MediaStreamTrackInterface::kAudioKind) {
+    uint32_t track_ssrc = 0;
+    auto params = receiver->GetParameters();
+    if (!params.encodings.empty() && params.encodings[0].ssrc.has_value()) {
+      track_ssrc = params.encodings[0].ssrc.value();
+      APP_LOG(AS_INFO) << "OnAddTrack: Audio track SSRC from receiver parameters: " << track_ssrc;
+    } else {
+      APP_LOG(AS_WARNING) << "OnAddTrack: Could not get SSRC from receiver parameters for track: " << track->id();
+    }
+
+    APP_LOG(AS_INFO) << "OnAddTrack: Current consumer_ssrc_map_ contents:";
+    for (const auto& [consumer_id, ssrc] : consumer_ssrc_map_) {
+      APP_LOG(AS_INFO) << "  ID: " << consumer_id << ", SSRC: " << ssrc;
+    }
+
     // Find an appropriate SSRC to potentially pass (though sink might not use
     // it) This part is tricky as the SSRC map might not be populated exactly
     // when OnAddTrack is called. For now, we might pass 0 or the first
     // available one, as the add/remove logic is the focus.
     uint32_t ssrc_to_pass = 0;
-    if (!consumer_ssrc_map_.empty()) {
-      ssrc_to_pass = consumer_ssrc_map_.begin()->second;
+    bool found_matching_consumer = false;
+    if (track_ssrc != 0) {
+        for (const auto& [consumer_id, ssrc] : consumer_ssrc_map_) {
+            if (ssrc == track_ssrc) {
+                ssrc_to_pass = ssrc;
+                found_matching_consumer = true;
+                APP_LOG(AS_INFO) << "OnAddTrack: Found matching SSRC (" << ssrc << ") in consumer_ssrc_map_ for consumer_id: " << consumer_id;
+                break;
+            }
+        }
     }
+    if (!found_matching_consumer && !consumer_ssrc_map_.empty()) {
+      ssrc_to_pass = consumer_ssrc_map_.begin()->second;
+      APP_LOG(AS_WARNING) << "OnAddTrack: Did not find exact SSRC match for track SSRC " << track_ssrc
+                          << ". Using first SSRC from map: " << ssrc_to_pass;
+    } else if (!found_matching_consumer && consumer_ssrc_map_.empty()){
+      APP_LOG(AS_WARNING) << "OnAddTrack: Did not find exact SSRC match for track SSRC " << track_ssrc
+                          << " and consumer_ssrc_map_ is empty. Passing 0.";
+    }
+
+
     APP_LOG(AS_INFO)
         << "Audio track found, calling AddAudioSinkToTrack (ssrc hint: "
         << ssrc_to_pass << ")";
@@ -2329,4 +2595,34 @@ void RoomCaller::LogRtpStats() {
                   })));
     }
   }
+}
+
+// Helper that reuses DirectApplication::CreatePeerConnection() logic but stores the
+// result in `producer_peer_connection_` instead of the default
+// `peer_connection_`.  For now we implement the minimal version that simply
+// duplicates the default configuration and returns true when a connection was
+// created; further fine-tuning (e.g. configuring the transceiver direction to
+// send-only) happens later in ProduceAudio().
+bool RoomCaller::CreateProducerPeerConnection() {
+  // Already exists?
+  if (producer_peer_connection_) {
+    return true;
+  }
+
+  // We temporarily back up the global pointer, call the inherited method to
+  // build a new PeerConnection and then restore the original.
+  auto original_pc = peer_connection_;
+  peer_connection_ = nullptr;
+  if (!DirectApplication::CreatePeerConnection()) {
+    // Failed – restore and abort
+    peer_connection_ = original_pc;
+    return false;
+  }
+
+  // Transfer ownership of the freshly created PeerConnection to the producer
+  // slot and restore the consumer pointer.
+  producer_peer_connection_ = peer_connection_;
+  peer_connection_ = original_pc;
+
+  return (producer_peer_connection_ != nullptr);
 }

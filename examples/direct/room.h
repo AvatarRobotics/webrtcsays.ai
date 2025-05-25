@@ -76,6 +76,12 @@ class DIRECT_API RoomCaller : public DirectApplication {
   void SendPendingRequests();
   void ReconnectWebSocket();
   void HandlePeerReconnection();
+  // --- NEW: separate PeerConnection for sending (producer) side ---
+  bool CreateProducerPeerConnection();
+
+  // Consumer side continues to use the original `peer_connection_` pointer
+  rtc::scoped_refptr<webrtc::PeerConnectionInterface> producer_peer_connection_;
+  
   virtual bool SetVideoSource(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> video_source) override { return false; }
   virtual bool SetVideoSink(std::unique_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> video_sink) override { return false; }
   std::unique_ptr<MediaSoupWrapper> wss_;
@@ -116,7 +122,7 @@ class DIRECT_API RoomCaller : public DirectApplication {
   void SendPeriodicIceBindings();
   bool ice_binding_started_ = false;
 
-  static constexpr bool kIgnoreZerosInIceCandidates = false;
+  static constexpr bool kIgnoreZerosInIceCandidates = true;
   static constexpr int kMaxReconnectAttempts = 5;
   static constexpr int kReconnectDelayMs = 1000;
   int reconnect_attempts_ = 0;

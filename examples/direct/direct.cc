@@ -27,6 +27,11 @@
 #include "api/video_codecs/video_encoder_factory_template_libvpx_vp9_adapter.h"
 #include "api/video_codecs/video_encoder_factory_template_open_h264_adapter.h"
 #include <regex>
+#include <atomic>
+#include <map>
+#include <sstream>
+#include <memory>
+#include <cstdlib>
 
 #include "direct.h"
 #include "option.h"
@@ -62,7 +67,6 @@ void llamaCallback(bool success, const char* response, void* user_data) {
 // DirectApplication Implementation
 DirectApplication::DirectApplication(Options opts)
   : opts_(opts),
-    llama_(nullptr),
     llamaCallback_(llamaCallback, this) {
   // Threads will be created in Initialize() to support full teardown/re-init
   peer_connection_factory_ = nullptr;
@@ -256,6 +260,34 @@ bool DirectApplication::Initialize() {
     RTC_LOG(LS_ERROR) << "Failed to start threads";
     return false;
   }
+
+  // -------------------------------------------------------------------
+  // Make sure we have a PeerConnectionFactory ready.  The previous edit
+  // accidentally removed the block that created it, which led to a null
+  // dereference (seg-fault) below.  For now create it with the minimal set
+  // of components – this can be refined later if advanced audio features are
+  // needed.
+  // -------------------------------------------------------------------
+  if (!peer_connection_factory_) {
+    dependencies_.network_thread = network_thread();
+    dependencies_.worker_thread = worker_thread();
+    dependencies_.signaling_thread = signaling_thread();
+
+    peer_connection_factory_ = webrtc::CreatePeerConnectionFactory(
+        dependencies_.network_thread,
+        dependencies_.worker_thread,
+        dependencies_.signaling_thread,
+        /*default adm*/ nullptr,
+        webrtc::CreateBuiltinAudioEncoderFactory(),
+        webrtc::CreateBuiltinAudioDecoderFactory(),
+        nullptr, nullptr, nullptr, nullptr);
+
+    if (!peer_connection_factory_) {
+      RTC_LOG(LS_ERROR) << "Failed to create PeerConnectionFactory";
+      return false;
+    }
+  }
+
   return true;
 }
 
@@ -381,10 +413,26 @@ bool DirectApplication::CreatePeerConnection() {
   webrtc::PeerConnectionInterface::RTCConfiguration config;
   config.sdp_semantics = webrtc::SdpSemantics::kUnifiedPlan;
   webrtc::PeerConnectionFactory::Options options = {};
-  if(opts_.encryption) {
+
+  // Create/get certificate if needed and wire it into the configuration
+  if (opts_.encryption) {
       RTC_LOG(LS_INFO) << "Encryption is enabled!";
-      auto certificate = DirectLoadCertificateFromEnv(opts_);
-      config.certificates.push_back(certificate);
+      // Re-use the already loaded certificate (created during initialization)
+      // to guarantee that the fingerprint we announce in the DTLS parameters
+      // is exactly the one that will be presented during the TLS handshake.
+      if(!certificate_) {
+        // This can happen if CreatePeerConnection() is called before we had
+        // a chance to load / generate the certificate in the constructor or
+        // if encryption was toggled afterwards.  Ensure we have it.
+        certificate_ = DirectLoadCertificateFromEnv(opts_);
+        UpdateCertificateStats();
+      }
+
+      if(certificate_) {
+        config.certificates.push_back(certificate_);
+      } else {
+        RTC_LOG(LS_ERROR) << "Failed to obtain certificate, WebRTC DTLS would not work";
+      }
   } else {
       // WARNING! FOLLOWING CODE IS FOR DEBUG ONLY!
       options.disable_encryption = true;

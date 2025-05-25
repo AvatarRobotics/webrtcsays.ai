@@ -1313,20 +1313,25 @@ bool MediaSoupWrapper::produce_audio(const std::string& transportId,
 
   Json::Value encoding;
   encoding["dtx"] = false;
-  encoding["ssrc"] = send_ssrc;  // Your sending SSRC
+  if (send_ssrc != 0) {
+    encoding["ssrc"] = send_ssrc;
+    APP_LOG(AS_INFO) << "MediaSoupWrapper::produce_audio - Explicitly setting SSRC in produce request: " << send_ssrc;
+  } else {
+    APP_LOG(AS_INFO) << "MediaSoupWrapper::produce_audio - Not setting SSRC in produce request (will be auto-detected by mediasoup).";
+  }
   rtpParams["encodings"].append(encoding);
 
   // Add header extensions
   Json::Value midExt;
   midExt["uri"] = "urn:ietf:params:rtp-hdrext:sdes:mid";
-  midExt["id"] = 4;
+  midExt["id"] = 1;
   midExt["encrypt"] = false;
   rtpParams["headerExtensions"].append(midExt);
 
   // Add audio level extension
   Json::Value levelExt;
   levelExt["uri"] = "urn:ietf:params:rtp-hdrext:ssrc-audio-level";
-  levelExt["id"] = 1;
+  levelExt["id"] = 10;
   levelExt["encrypt"] = false;
   rtpParams["headerExtensions"].append(levelExt);
 
