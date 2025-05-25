@@ -301,7 +301,115 @@ bool DirectApplication::CreatePeerConnection() {
       peer_connection_ = nullptr;
     }
 
-  // Prepare PeerConnection configuration and options structures
+  // Create/get certificate if needed
+  if (opts_.encryption && !certificate_) {
+    certificate_ = DirectLoadCertificateFromEnv(opts_);
+    certificate_stats_ = certificate_->GetSSLCertificate().GetStats();
+    RTC_LOG(LS_INFO) << "Using certificate with fingerprint: "
+                      << certificate_stats_->fingerprint << " and algorithm: "
+                      << certificate_stats_->fingerprint_algorithm;
+  }
+
+  // Create a single task queue factory that will be used consistently
+  std::unique_ptr<webrtc::TaskQueueFactory> task_queue_factory = 
+      webrtc::CreateDefaultTaskQueueFactory();
+  
+  // Store the raw pointer for logging
+  webrtc::TaskQueueFactory* task_queue_factory_ptr = task_queue_factory.get();
+  
+  // Create audio task queue - this will be used for audio operations
+  audio_task_queue_ = task_queue_factory->CreateTaskQueue(
+      "AudioTaskQueue", webrtc::TaskQueueFactory::Priority::NORMAL);
+  
+  RTC_LOG(LS_INFO) << "Created TaskQueueFactory: " << task_queue_factory_ptr
+                  << " and AudioTaskQueue: " << audio_task_queue_.get();
+
+  // Task queue factory setup
+  dependencies_.network_thread = network_thread();
+  dependencies_.worker_thread = worker_thread();
+  dependencies_.signaling_thread = signaling_thread();
+
+  // Audio device module type
+  webrtc::AudioDeviceModule::AudioLayer kAudioDeviceModuleType = webrtc::AudioDeviceModule::kPlatformDefaultAudio;
+#ifdef WEBRTC_SPEECH_DEVICES
+
+  if (opts_.llama) {
+    webrtc::SpeechAudioDeviceFactory::SetLlamaEnabled(true);
+    webrtc::SpeechAudioDeviceFactory::SetLlamaModelFilename(opts_.llama_model);
+    webrtc::SpeechAudioDeviceFactory::SetLlavaMMProjFilename(opts_.llava_mmproj);
+    llama_ = nullptr; // uncomment to send message instead of audio 
+    //webrtc::SpeechAudioDeviceFactory::CreateWhillatsLlama(llamaCallback_);
+  } 
+
+  if (opts_.whisper && !opts_.whisper_model.empty()) {
+    kAudioDeviceModuleType = webrtc::AudioDeviceModule::kSpeechAudio; 
+    webrtc::SpeechAudioDeviceFactory::SetWhisperEnabled(true);
+    webrtc::SpeechAudioDeviceFactory::SetWhisperModelFilename(opts_.whisper_model);
+  }
+
+  if (opts_.llama && !opts_.llama_llava_yuv.empty()) {
+    webrtc::SpeechAudioDeviceFactory::SetYuvFilename(opts_.llama_llava_yuv, 
+      opts_.llama_llava_yuv_width, opts_.llama_llava_yuv_height);
+  }
+#endif // WEBRTC_SPEECH_DEVICES
+
+  // Create the audio device module on the worker thread so its lifecycle runs there.
+  rtc::Event adm_created;
+  dependencies_.worker_thread->PostTask([this, kAudioDeviceModuleType, task_queue_factory_ptr, &adm_created]() {
+    // Reset PCF and ADM references on worker thread for correct destruction.
+    peer_connection_factory_ = nullptr;
+    dependencies_.adm = nullptr;
+    audio_device_module_ = nullptr;
+    audio_device_module_ = webrtc::AudioDeviceModule::Create(
+        kAudioDeviceModuleType,
+        task_queue_factory_ptr);
+    if (audio_device_module_) {
+      RTC_LOG(LS_INFO) << "Audio device module created successfully on thread: "
+                       << rtc::Thread::Current();
+    } else {
+      RTC_LOG(LS_ERROR) << "Failed to create audio device module";
+    }
+    adm_created.Set();
+  });
+
+  // Wait for ADM creation to complete on the worker thread.
+  adm_created.Wait(webrtc::TimeDelta::Seconds(1));
+  if (!audio_device_module_) {
+    RTC_LOG(LS_ERROR) << "Audio device module creation failed after task execution";
+    return false;
+  }
+
+  dependencies_.adm = audio_device_module_;
+  dependencies_.task_queue_factory = std::move(task_queue_factory);
+
+  // PeerConnectionFactory creation
+  peer_connection_factory_ = webrtc::CreatePeerConnectionFactory(
+      dependencies_.network_thread,
+      dependencies_.worker_thread,
+      dependencies_.signaling_thread,
+      dependencies_.adm,
+      webrtc::CreateBuiltinAudioEncoderFactory(),
+      webrtc::CreateBuiltinAudioDecoderFactory(),
+      // Provide template-based video encoder and decoder factories
+      std::make_unique<webrtc::VideoEncoderFactoryTemplate<
+          webrtc::LibvpxVp8EncoderTemplateAdapter,
+          webrtc::LibvpxVp9EncoderTemplateAdapter,
+          webrtc::OpenH264EncoderTemplateAdapter,
+          webrtc::LibaomAv1EncoderTemplateAdapter>>(),
+      std::make_unique<webrtc::VideoDecoderFactoryTemplate<
+          webrtc::LibvpxVp8DecoderTemplateAdapter,
+          webrtc::LibvpxVp9DecoderTemplateAdapter,
+          webrtc::OpenH264DecoderTemplateAdapter,
+          webrtc::Dav1dDecoderTemplateAdapter>>(),      
+      nullptr, // audio_mixer
+      nullptr  // audio_processing
+  );
+
+  if (!peer_connection_factory_) {
+    RTC_LOG(LS_ERROR) << "Failed to create PeerConnectionFactory";
+    return false; // Handle error appropriately
+  }
+
   webrtc::PeerConnectionInterface::RTCConfiguration config;
   config.sdp_semantics = webrtc::SdpSemantics::kUnifiedPlan;
   webrtc::PeerConnectionFactory::Options options = {};

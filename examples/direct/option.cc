@@ -143,6 +143,7 @@ Options parseOptions(const std::vector<std::string>& args) {
       "  --whisper_model=<path>             Path to whisper model\n"
       "  --llama_model=<path>               Path to llama model\n"
       "  --llava_mmproj=<path>              Path to llava mmproj model\n"
+      "  --llama_llava_yuv=<path>;<width>x<height>  Path to llava yuv model, width, height\n"
       "  --webrtc_cert_path=<path>          Path to WebRTC certificate (default: 'cert.pem')\n"
       "  --webrtc_key_path=<path>           Path to WebRTC key (default: 'key.pem')\n"
       "  --turns=<ip,username,password>     Secured turn server address, e.g. \n"
@@ -233,7 +234,11 @@ Options parseOptions(const std::vector<std::string>& args) {
         }
         if (config_json.isMember("llama_llava_yuv") && config_json["llama_llava_yuv"].isString()) {
              RTC_LOG(LS_INFO) << "Config llama_llava_yuv: " << config_json["llama_llava_yuv"].asString(); // Log value
-             opts.llama_llava_yuv = expandHomePath(config_json["llama_llava_yuv"].asString());
+             std::vector<std::string> yuv_dimensions = stringSplit(config_json["llama_llava_yuv"].asString(), ";");
+             opts.llama_llava_yuv = expandHomePath(yuv_dimensions[0]);
+             std::vector<std::string> yuv_width_height = stringSplit(yuv_dimensions[1], "x");
+             opts.llama_llava_yuv_width = std::stoi(yuv_width_height[0]);
+             opts.llama_llava_yuv_height = std::stoi(yuv_width_height[1]);
         }
         if (config_json.isMember("address") && config_json["address"].isString()) {
              RTC_LOG(LS_INFO) << "Config address: " << config_json["address"].asString(); // Log value
