@@ -1304,7 +1304,7 @@ bool MediaSoupWrapper::produce_audio(const std::string& transportId,
 
   Json::Value codec;
   codec["mimeType"] = "audio/opus";
-  codec["payloadType"] = 111;
+  codec["payloadType"] = 100;
   codec["clockRate"] = 48000;
   codec["channels"] = 2;
   codec["parameters"]["minptime"] = 10;
@@ -1324,14 +1324,14 @@ bool MediaSoupWrapper::produce_audio(const std::string& transportId,
   // Add header extensions
   Json::Value midExt;
   midExt["uri"] = "urn:ietf:params:rtp-hdrext:sdes:mid";
-  midExt["id"] = 4;
+  midExt["id"] = 1;
   midExt["encrypt"] = false;
   rtpParams["headerExtensions"].append(midExt);
 
   // Add audio level extension
   Json::Value levelExt;
   levelExt["uri"] = "urn:ietf:params:rtp-hdrext:ssrc-audio-level";
-  levelExt["id"] = 1;
+  levelExt["id"] = 10;
   levelExt["encrypt"] = false;
   rtpParams["headerExtensions"].append(levelExt);
 
