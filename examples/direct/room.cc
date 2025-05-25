@@ -544,6 +544,12 @@ void RoomCaller::HandleNewConsumer(const Json::Value& data) {
       consumer_ssrc_map_[consumer_id] = consumer_ssrc;
     }
     AddAudioSinkToPeerConnection();  // Safe to call from signaling thread
+
+    // A new consumer means the set of SSRCs (and therefore the remote SDP)
+    // has changed.  Clear the flag so that MaybeSetFinalRemoteDescription()
+    // will build and apply an updated SDP that includes the fresh SSRC.
+    remote_description_set_.store(false);
+    MaybeSetFinalRemoteDescription();
   });
 
   // // Add ICE candidates
@@ -1350,7 +1356,7 @@ std::string RoomCaller::BuildRemoteSdpBasedOnLocalOffer(
   std::string consumer_fingerprint;
 
   if (!creating_initial_offer && consumer_ssrc) {
-    // (line removed)  // consumer SSRC will be accepted dynamically
+    sdp << "a=ssrc:" << consumer_ssrc << " cname:mediasoup\r\n";
   }
 
   sdp << "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n"
