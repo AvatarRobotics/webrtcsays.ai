@@ -75,6 +75,7 @@ IPAddressResult GetLocalIPAddress() {
     struct ifaddrs *ifaddr, *ifa;
     char ip[INET_ADDRSTRLEN] = {0};
     bool isWiFi = false;
+    std::string selectedInterface;
 
     if (getifaddrs(&ifaddr) == -1) {
         std::cerr << "getifaddrs failed: " << strerror(errno) << std::endl;
@@ -94,17 +95,24 @@ IPAddressResult GetLocalIPAddress() {
         }
     }
 
-    // First pass: Look for en0 (Wi-Fi)
+    // Helper function to check if interface name looks like a network interface
+    auto isNetworkInterface = [](const char* name) {
+        // Check for common network interface patterns: en0, en1, en2, etc.
+        return (strncmp(name, "en", 2) == 0 && strlen(name) >= 3 && isdigit(name[2]));
+    };
+
+    // First pass: Look for preferred network interfaces (en0, en1, etc.)
     for (ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
         if (ifa->ifa_addr == nullptr) continue;
         if (ifa->ifa_addr->sa_family == AF_INET &&
             !(ifa->ifa_flags & IFF_LOOPBACK) &&
             (ifa->ifa_flags & IFF_UP) &&
-            strcmp(ifa->ifa_name, "en0") == 0) {
+            isNetworkInterface(ifa->ifa_name)) {
             struct sockaddr_in *sin = (struct sockaddr_in *)ifa->ifa_addr;
             inet_ntop(AF_INET, &sin->sin_addr, ip, INET_ADDRSTRLEN);
-            isWiFi = true;
-            std::cout << "Selected interface: " << ifa->ifa_name << ", IP: " << ip << " (Wi-Fi)" << std::endl;
+            isWiFi = true;  // Assume en* interfaces are Wi-Fi/Ethernet (suitable for Bonjour)
+            selectedInterface = ifa->ifa_name;
+            std::cout << "Selected interface: " << ifa->ifa_name << ", IP: " << ip << " (Network)" << std::endl;
             break;
         }
     }
@@ -119,7 +127,8 @@ IPAddressResult GetLocalIPAddress() {
                 struct sockaddr_in *sin = (struct sockaddr_in *)ifa->ifa_addr;
                 inet_ntop(AF_INET, &sin->sin_addr, ip, INET_ADDRSTRLEN);
                 isWiFi = false;
-                std::cout << "Selected fallback interface: " << ifa->ifa_name << ", IP: " << ip << " (Non-Wi-Fi)" << std::endl;
+                selectedInterface = ifa->ifa_name;
+                std::cout << "Selected fallback interface: " << ifa->ifa_name << ", IP: " << ip << " (Fallback)" << std::endl;
                 break;
             }
         }
@@ -127,7 +136,7 @@ IPAddressResult GetLocalIPAddress() {
 
     freeifaddrs(ifaddr);
     if (ip[0] == '\0') {
-        std::cerr << "No valid IP found (en0 not available, no fallback)" << std::endl;
+        std::cerr << "No valid IP found" << std::endl;
     }
     return {ip, isWiFi};
 }
@@ -145,10 +154,9 @@ bool DIRECT_API AdvertiseBonjourService(const std::string& name, int port) {
         return false;
     }
 
-    // Require Wi-Fi for Bonjour
+    // Prefer network interfaces for Bonjour, but allow fallback
     if (!ipResult.isWiFi) {
-        std::cerr << "Not on Wi-Fi (interface is not en0), skipping Bonjour advertising" << std::endl;
-        return false;
+        std::cout << "Warning: Using fallback interface for Bonjour advertising (may have limited discoverability)" << std::endl;
     }
 
     // Sanitize service name
@@ -169,43 +177,15 @@ bool DIRECT_API AdvertiseBonjourService(const std::string& name, int port) {
         return false;
     }
 
-    // Get system hostname
+    // Get system hostname for logging purposes
     char sys_hostname[256];
     if (gethostname(sys_hostname, sizeof(sys_hostname)) != 0) {
         std::cerr << "gethostname failed: " << strerror(errno) << std::endl;
         sys_hostname[0] = '\0';
     }
-
-    // Generate a unique .local hostname
-    std::string hostname;
-    std::string base_hostname = service_name; // Use service name as base (e.g., "RobotPhone")
-    // Convert to lowercase and replace spaces/underscores for mDNS compatibility
-    for (char& c : base_hostname) {
-        if (c == ' ' || c == '_') {
-            c = '-';
-        } else {
-            c = std::tolower(c);
-        }
-    }
-    // Trim to 63 characters (mDNS hostname limit without .local)
-    if (base_hostname.length() > 63) {
-        base_hostname = base_hostname.substr(0, 63);
-    }
-    hostname = base_hostname + ".local"; // Append .local (e.g., "robotphone.local")
-
-    // Validate system hostname and override if invalid
+    
     std::string sys_hostname_str(sys_hostname);
-    if (sys_hostname_str.empty() || sys_hostname_str == "localhost" || 
-        sys_hostname_str.find(".local") == std::string::npos) {
-        std::cout << "Invalid system hostname: " << (sys_hostname_str.empty() ? "empty" : sys_hostname_str) 
-                  << ", using generated hostname: " << hostname << std::endl;
-    } else {
-        // Use system hostname if valid and ends with .local
-        hostname = sys_hostname_str;
-        if (hostname.find(".local") == std::string::npos) {
-            hostname += ".local";
-        }
-    }
+    std::cout << "System hostname: " << (sys_hostname_str.empty() ? "empty" : sys_hostname_str) << std::endl;
 
     // Create TXT record with IP
     std::string txt_record = "ip=" + ipResult.ip;
@@ -228,10 +208,11 @@ bool DIRECT_API AdvertiseBonjourService(const std::string& name, int port) {
     std::cout << "  Name: " << service_name << std::endl;
     std::cout << "  Type: _webrtcsays._tcp" << std::endl;
     std::cout << "  Port: " << port << std::endl;
-    std::cout << "  Host: " << hostname << std::endl;
+    std::cout << "  Host: (system default)" << std::endl;
     std::cout << "  TXT: " << (txt_len ? txt_record : "none") << std::endl;
 
     // Advertise as _webrtcsays._tcp.local.
+    // Use nullptr for hostname to let mDNS use the system's resolvable hostname
     DNSServiceErrorType err = DNSServiceRegister(
         &g_advert_ref,
         0, // flags
@@ -239,7 +220,7 @@ bool DIRECT_API AdvertiseBonjourService(const std::string& name, int port) {
         service_name.c_str(),
         "_webrtcsays._tcp",
         nullptr, // domain (default local)
-        hostname.c_str(),
+        nullptr, // hostname (use system default)
         htons(port),
         txt_len,
         txt_len ? txt_buffer : nullptr,
@@ -265,7 +246,7 @@ bool DIRECT_API AdvertiseBonjourService(const std::string& name, int port) {
         }
         std::cerr << std::endl;
         std::cerr << "Parameters: Name=" << service_name << ", Type=_webrtcsays._tcp, Port=" << port
-                  << ", Host=" << hostname << ", TXT=" << (txt_len ? txt_record : "none") << std::endl;
+                  << ", Host=(system default), TXT=" << (txt_len ? txt_record : "none") << std::endl;
         return false;
     }
 
@@ -305,19 +286,60 @@ static void DNSSD_API resolve_callback(
 {
     BonjourDiscoveryContext* ctx = static_cast<BonjourDiscoveryContext*>(context);
     if (errorCode == kDNSServiceErr_NoError) {
-        // Resolve hosttarget to IP
-        struct addrinfo hints = {0,0,0,0,0,0,0,0}, *res = nullptr;
-        hints.ai_family = AF_INET;
-        if (getaddrinfo(hosttarget, nullptr, &hints, &res) == 0 && res) {
-            char ipstr[INET_ADDRSTRLEN] = {0};
-            struct sockaddr_in* s = (struct sockaddr_in*)res->ai_addr;
-            inet_ntop(AF_INET, &s->sin_addr, ipstr, sizeof(ipstr));
-            ctx->found_ip = ipstr;
+        std::cout << "[Resolve] Full name: " << (fullname ? fullname : "null") << std::endl;
+        std::cout << "[Resolve] Host target: " << (hosttarget ? hosttarget : "null") << std::endl;
+        std::cout << "[Resolve] Port: " << ntohs(port) << std::endl;
+        
+        // First try to extract IP from TXT record
+        std::string ip_from_txt;
+        if (txtLen > 0 && txtRecord) {
+            // Parse TXT record to find ip= field
+            const unsigned char* ptr = txtRecord;
+            const unsigned char* end = txtRecord + txtLen;
+            while (ptr < end) {
+                uint8_t len = *ptr++;
+                if (ptr + len <= end) {
+                    std::string entry(reinterpret_cast<const char*>(ptr), len);
+                    if (entry.substr(0, 3) == "ip=") {
+                        ip_from_txt = entry.substr(3);
+                        std::cout << "[Resolve] Found IP in TXT: " << ip_from_txt << std::endl;
+                        break;
+                    }
+                }
+                ptr += len;
+            }
+        }
+        
+        if (!ip_from_txt.empty()) {
+            // Use IP from TXT record
+            ctx->found_ip = ip_from_txt;
             ctx->found_port = ntohs(port);
-            freeaddrinfo(res);
             ctx->found = true;
             ctx->cv.notify_all();
+            std::cout << "[Resolve] Success via TXT: " << ctx->found_ip << ":" << ctx->found_port << std::endl;
+        } else if (hosttarget) {
+            // Fallback: resolve hosttarget to IP
+            std::cout << "[Resolve] Attempting to resolve hostname: " << hosttarget << std::endl;
+            struct addrinfo hints = {0}, *res = nullptr;
+            hints.ai_family = AF_INET;
+            hints.ai_socktype = SOCK_STREAM;
+            
+            if (getaddrinfo(hosttarget, nullptr, &hints, &res) == 0 && res) {
+                char ipstr[INET_ADDRSTRLEN] = {0};
+                struct sockaddr_in* s = (struct sockaddr_in*)res->ai_addr;
+                inet_ntop(AF_INET, &s->sin_addr, ipstr, sizeof(ipstr));
+                ctx->found_ip = ipstr;
+                ctx->found_port = ntohs(port);
+                freeaddrinfo(res);
+                ctx->found = true;
+                ctx->cv.notify_all();
+                std::cout << "[Resolve] Success via hostname: " << ctx->found_ip << ":" << ctx->found_port << std::endl;
+            } else {
+                std::cout << "[Resolve] Failed to resolve hostname: " << hosttarget << std::endl;
+            }
         }
+    } else {
+        std::cout << "[Resolve] Error: " << errorCode << std::endl;
     }
 }
 
@@ -332,22 +354,26 @@ static void DNSSD_API browse_callback(
     void *context)
 {
     BonjourDiscoveryContext* ctx = static_cast<BonjourDiscoveryContext*>(context);
-    // Debug: print both names, lengths, and hex
-    if (serviceName) {
-        std::cout << "[Bonjour] Looking for: '" << ctx->target_name << "' (len=" << ctx->target_name.length() << ")\n";
-        std::cout << "[Bonjour] Found:      '" << serviceName << "' (len=" << strlen(serviceName) << ")\n";
-        // Print hex for both
-        std::cout << "[Bonjour] Target hex: ";
-        for (char c : ctx->target_name) std::cout << std::hex << ((int)(unsigned char)c) << " ";
-        std::cout << "\n[Bonjour] Found hex:  ";
-        for (size_t i = 0; i < strlen(serviceName); ++i) std::cout << std::hex << ((int)(unsigned char)serviceName[i]) << " ";
-        std::cout << std::dec << std::endl;
+    
+    if (errorCode != kDNSServiceErr_NoError) {
+        std::cout << "[Browse] Error: " << errorCode << std::endl;
+        return;
     }
-    if (errorCode == kDNSServiceErr_NoError && ctx && serviceName) {
-        // For testing: always try to resolve the first service found
-        if (ctx->target_name != serviceName) {
-            std::cout << "[Bonjour] WARNING: Name mismatch, but resolving anyway for test." << std::endl;
-        }
+    
+    if (!ctx || !serviceName) {
+        std::cout << "[Browse] Invalid context or service name" << std::endl;
+        return;
+    }
+    
+    std::cout << "[Browse] Found service: '" << serviceName << "' in domain: " << (replyDomain ? replyDomain : "null") << std::endl;
+    std::cout << "[Browse] Looking for: '" << ctx->target_name << "'" << std::endl;
+    
+    // Check if this is the service we're looking for
+    bool isTargetService = (ctx->target_name == serviceName);
+    
+    if (isTargetService || ctx->target_name.empty()) {
+        std::cout << "[Browse] " << (isTargetService ? "Target service found" : "Resolving first available service") << std::endl;
+        
         DNSServiceRef resolveRef = nullptr;
         DNSServiceErrorType err = DNSServiceResolve(
             &resolveRef,
@@ -358,17 +384,42 @@ static void DNSSD_API browse_callback(
             replyDomain,
             resolve_callback,
             context);
+            
         if (err == kDNSServiceErr_NoError) {
-            DNSServiceProcessResult(resolveRef);
+            std::cout << "[Browse] Starting resolution..." << std::endl;
+            // Process the resolve operation with timeout
+            auto start_time = std::chrono::steady_clock::now();
+            while (!ctx->found && 
+                   std::chrono::steady_clock::now() - start_time < std::chrono::seconds(5)) {
+                DNSServiceErrorType processErr = DNSServiceProcessResult(resolveRef);
+                if (processErr != kDNSServiceErr_NoError) {
+                    std::cout << "[Browse] Process result error: " << processErr << std::endl;
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
             DNSServiceRefDeallocate(resolveRef);
+            
+            if (ctx->found) {
+                std::cout << "[Browse] Resolution completed successfully" << std::endl;
+            } else {
+                std::cout << "[Browse] Resolution timed out" << std::endl;
+            }
+        } else {
+            std::cout << "[Browse] DNSServiceResolve failed: " << err << std::endl;
         }
+    } else {
+        std::cout << "[Browse] Skipping service (not target): " << serviceName << std::endl;
     }
 }
 
 bool DIRECT_API DiscoverBonjourService(const std::string& name, std::string& out_ip, int& out_port, int timeout_seconds) {
+    std::cout << "[Discovery] Starting Bonjour discovery for: '" << name << "'" << std::endl;
+    
     BonjourDiscoveryContext ctx;
     ctx.target_name = name;
     DNSServiceRef browseRef = nullptr;
+    
     DNSServiceErrorType err = DNSServiceBrowse(
         &browseRef,
         0,
@@ -377,27 +428,47 @@ bool DIRECT_API DiscoverBonjourService(const std::string& name, std::string& out
         nullptr,
         browse_callback,
         &ctx);
+        
     if (err != kDNSServiceErr_NoError) {
-        std::cerr << "Bonjour browse failed: " << err << std::endl;
+        std::cerr << "[Discovery] Bonjour browse failed: " << err << std::endl;
         return false;
     }
+    
+    std::cout << "[Discovery] Browse started, waiting for results..." << std::endl;
+    
     // Wait for result or timeout
-    std::unique_lock<std::mutex> lock(ctx.mtx);
-    int effective_timeout = timeout_seconds > 0 ? timeout_seconds : 10;
-    //ctx.cv.wait_for(lock, std::chrono::seconds(effective_timeout), [&ctx]{ return ctx.found.load(); });
+    int effective_timeout = timeout_seconds > 0 ? timeout_seconds : 15;
     auto start = std::chrono::steady_clock::now();
-    while (!ctx.found && std::chrono::steady_clock::now() - start < std::chrono::seconds(effective_timeout)) {
-        DNSServiceProcessResult(browseRef);
+    auto timeout_duration = std::chrono::seconds(effective_timeout);
+    
+    while (!ctx.found && std::chrono::steady_clock::now() - start < timeout_duration) {
+        DNSServiceErrorType processErr = DNSServiceProcessResult(browseRef);
+        if (processErr != kDNSServiceErr_NoError) {
+            std::cout << "[Discovery] Process result error: " << processErr << std::endl;
+            break;
+        }
+        
+        // Short sleep to prevent busy waiting
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        
+        // Check if we found something
+        if (ctx.found) {
+            std::cout << "[Discovery] Service found and resolved!" << std::endl;
+            break;
+        }
     }
+    
     DNSServiceRefDeallocate(browseRef);
-
-    DNSServiceRefDeallocate(browseRef);
+    
     if (ctx.found) {
         out_ip = ctx.found_ip;
         out_port = ctx.found_port;
+        std::cout << "[Discovery] Success: " << out_ip << ":" << out_port << std::endl;
         return true;
+    } else {
+        std::cout << "[Discovery] Timeout: No service found within " << effective_timeout << " seconds" << std::endl;
+        return false;
     }
-    return false;
 }
 
 #endif // #if TARGET_OS_IOS || TARGET_OS_OSX
