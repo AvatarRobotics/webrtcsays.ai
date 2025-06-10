@@ -180,7 +180,14 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
   void RunOnBackgroundThread();
 
   // Signal to quit the application
-  void SignalQuit() { should_quit_ = true; }
+  virtual void SignalQuit() { 
+    should_quit_ = true; 
+    // Wake up all threads to process the quit signal by posting empty tasks
+    if (network_thread_) network_thread_->PostTask([](){});
+    if (worker_thread_) worker_thread_->PostTask([](){});
+    if (signaling_thread_) signaling_thread_->PostTask([](){});
+    if (main_thread_) main_thread_->PostTask([](){});
+  }
 
   // Disconnect active connections without destroying core resources
   virtual void Disconnect();
@@ -343,6 +350,12 @@ class DIRECT_API DirectPeer : public DirectApplication {
   bool WaitUntilConnectionClosed(int give_up_after_ms);
   // Method to reset the event before a new connection attempt
   void ResetConnectionClosedEvent();
+  
+  // Override SignalQuit to also signal connection closed event
+  void SignalQuit() override { 
+    DirectApplication::SignalQuit(); 
+    connection_closed_event_.Set(); // Force any waiting threads to wake up
+  }
 
   // Override DirectApplication methods
   virtual void HandleMessage(rtc::AsyncPacketSocket* socket,

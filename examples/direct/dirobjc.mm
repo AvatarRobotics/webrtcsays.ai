@@ -320,10 +320,10 @@ static void DNSSD_API resolve_callback(
         } else if (hosttarget) {
             // Fallback: resolve hosttarget to IP
             std::cout << "[Resolve] Attempting to resolve hostname: " << hosttarget << std::endl;
-            struct addrinfo hints = {0}, *res = nullptr;
-            hints.ai_family = AF_INET;
-            hints.ai_socktype = SOCK_STREAM;
-            
+            struct addrinfo hints = {0, AF_INET, SOCK_STREAM, 0, 0, 0, 0, nullptr};
+            // hints.ai_family = AF_INET;
+            // hints.ai_socktype = SOCK_STREAM;
+            struct addrinfo* res = nullptr;
             if (getaddrinfo(hosttarget, nullptr, &hints, &res) == 0 && res) {
                 char ipstr[INET_ADDRSTRLEN] = {0};
                 struct sockaddr_in* s = (struct sockaddr_in*)res->ai_addr;

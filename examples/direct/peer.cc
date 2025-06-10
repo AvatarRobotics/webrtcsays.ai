@@ -67,6 +67,23 @@ void DirectPeer::Start() {
 
   // Reset the closed event before starting a new connection attempt
   ResetConnectionClosedEvent();
+  
+  // Set a timeout to automatically fail the connection if it takes too long
+  main_thread()->PostDelayedTask([this]() {
+    if (connection_closed_event_.Wait(webrtc::TimeDelta::Zero())) {
+      // Connection already closed, nothing to do
+      return;
+    }
+    
+    // Check if we're still in a connecting state after timeout
+    if (peer_connection_ && 
+        peer_connection_->ice_connection_state() != webrtc::PeerConnectionInterface::kIceConnectionConnected &&
+        peer_connection_->ice_connection_state() != webrtc::PeerConnectionInterface::kIceConnectionCompleted) {
+      RTC_LOG(LS_WARNING) << "Connection timeout after 30 seconds. Current ICE state: " 
+                          << static_cast<int>(peer_connection_->ice_connection_state());
+      connection_closed_event_.Set(); // Signal timeout
+    }
+  }, webrtc::TimeDelta::Seconds(30)); // 30 second timeout
 
   signaling_thread()->PostTask([this]() {
 
@@ -390,28 +407,77 @@ void DirectPeer::AddIceCandidate(const std::string& candidate_sdp) {
 
 // PeerConnectionObserver implementation
 void DirectPeer::OnSignalingChange(webrtc::PeerConnectionInterface::SignalingState new_state) {
-    // Log the raw enum value since SignalingStateToString is removed
-    RTC_LOG(LS_INFO) << "PeerConnection SignalingState changed to: " << static_cast<int>(new_state);
+    const char* state_names[] = {
+        "Stable", "HaveLocalOffer", "HaveLocalPrAnswer", "HaveRemoteOffer", "HaveRemotePrAnswer", "Closed"
+    };
+    const char* state_name = (new_state < 6) ? state_names[new_state] : "Unknown";
+    
+    RTC_LOG(LS_INFO) << "PeerConnection SignalingState changed to: " 
+                     << static_cast<int>(new_state) << " (" << state_name << ")";
+    
+    // If the signaling state goes to Closed, also signal connection closed
+    if (new_state == webrtc::PeerConnectionInterface::kClosed) {
+        RTC_LOG(LS_INFO) << "PeerConnection signaling state is Closed. Signaling connection_closed_event.";
+        connection_closed_event_.Set();
+    }
 }
 
 void DirectPeer::OnIceConnectionChange(webrtc::PeerConnectionInterface::IceConnectionState new_state) {
-    // Log the raw enum value since IceConnectionStateToString is removed
-    RTC_LOG(LS_INFO) << "PeerConnection IceConnectionState changed to: " << static_cast<int>(new_state);
-    // This is the key callback for knowing the connection is truly down
-    if (new_state == webrtc::PeerConnectionInterface::kIceConnectionClosed ||
-        new_state == webrtc::PeerConnectionInterface::kIceConnectionFailed) {
-        RTC_LOG(LS_INFO) << "Connection closed or failed. Signaling event.";
-        connection_closed_event_.Set(); // Signal the event
-        // Here you would signal your main application logic that it's safe to attempt reconnect.
-        // For example, set a flag that Connect() can check:
-        // is_fully_closed_ = true; // (Need to add this flag to DirectPeer/Application)
+    const char* state_names[] = {
+        "New", "Checking", "Connected", "Completed", "Failed", "Disconnected", "Closed", "Max"
+    };
+    const char* state_name = (new_state < 7) ? state_names[new_state] : "Unknown";
+    
+    RTC_LOG(LS_INFO) << "PeerConnection IceConnectionState changed to: " 
+                     << static_cast<int>(new_state) << " (" << state_name << ")";
+    
+    // Handle successful connection
+    if (new_state == webrtc::PeerConnectionInterface::kIceConnectionConnected ||
+        new_state == webrtc::PeerConnectionInterface::kIceConnectionCompleted) {
+        RTC_LOG(LS_INFO) << "Connection established successfully!";
+    }
+    
+    // Handle connection failure, disconnection, or closure
+    if (new_state == webrtc::PeerConnectionInterface::kIceConnectionFailed ||
+        new_state == webrtc::PeerConnectionInterface::kIceConnectionDisconnected ||
+        new_state == webrtc::PeerConnectionInterface::kIceConnectionClosed) {
+        RTC_LOG(LS_INFO) << "Connection failed/disconnected/closed. Signaling connection_closed_event.";
+        connection_closed_event_.Set(); // Signal the event to restart the callee
     }
 }
 
 // Method for external logic to wait for the closed signal
 bool DirectPeer::WaitUntilConnectionClosed(int give_up_after_ms) {
     RTC_LOG(LS_INFO) << "Waiting for connection closed event...";
-    return connection_closed_event_.Wait(webrtc::TimeDelta::Millis(give_up_after_ms));
+    
+    // Check should_quit_ immediately and periodically during wait
+    if (should_quit_) {
+        RTC_LOG(LS_INFO) << "Quit signal detected, returning immediately";
+        return true; // Return true to break the calling loop
+    }
+    
+    // Wait in smaller chunks to check quit flag periodically
+    int chunk_size = std::min(give_up_after_ms, 100); // 100ms chunks
+    int remaining = give_up_after_ms;
+    
+    while (remaining > 0 && !should_quit_) {
+        int current_wait = std::min(remaining, chunk_size);
+        if (connection_closed_event_.Wait(webrtc::TimeDelta::Millis(current_wait))) {
+            RTC_LOG(LS_INFO) << "Connection closed event received";
+            return true; // Event was signaled
+        }
+        remaining -= current_wait;
+        
+        // Check quit flag again
+        if (should_quit_) {
+            RTC_LOG(LS_INFO) << "Quit signal detected during wait, exiting";
+            return true; // Return true to break the calling loop
+        }
+    }
+    
+    // Timeout reached
+    RTC_LOG(LS_INFO) << "Wait timeout reached or quit requested";
+    return false;
 }
 
 // Method to reset the event before a new connection attempt
