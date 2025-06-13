@@ -61,6 +61,22 @@ DirectCaller::~DirectCaller() {
     // tcp_socket_ cleanup is handled by DirectApplication base class destructor/Cleanup
 }
 
+bool DirectCaller::Connect(const char* ip, int port) {
+    remote_addr_ = rtc::SocketAddress(ip, port);
+    return Connect();
+}
+
+#if TARGET_OS_IOS || TARGET_OS_OSX
+bool DirectCaller::ConnectWithBonjourName(const char* bonjour_name) {
+    std::string ip;
+    int port = 0;
+    if (DiscoverBonjourService(bonjour_name, ip, port)) {
+        remote_addr_ = rtc::SocketAddress(ip, port);
+    }
+    return Connect();
+}
+#endif // #if TARGET_OS_IOS || TARGET_OS_OSX
+
 bool DirectCaller::Connect() {
     auto task = [this]() -> bool {
         // Create raw socket

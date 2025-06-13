@@ -195,10 +195,40 @@ class StaticPeriodicVideoTrackSource : public VideoTrackSource {
 
 // Simple video sink that logs frame information to the console
 class LlamaVideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+  // Function to check if a WebRTC VideoFrame (I420 format) is black
+  bool isVideoFrameBlack(const webrtc::VideoFrame& frame, int threshold = 16) {
+      // Get the I420 buffer from the VideoFrame
+      rtc::scoped_refptr<webrtc::I420BufferInterface> buffer = frame.video_frame_buffer()->ToI420();
+      if (!buffer) {
+          return false; // Invalid buffer
+      }
+
+      // Get Y plane data, width, height, and stride
+      const uint8_t* yPlane = buffer->DataY();
+      int width = buffer->width();
+      int height = buffer->height();
+      int stride = buffer->StrideY();
+
+      // Iterate through the Y plane
+      for (int y = 0; y < height; ++y) {
+          for (int x = 0; x < width; ++x) {
+              // Access Y value at position (x, y)
+              uint8_t yValue = yPlane[y * stride + x];
+              // If any Y value is above the threshold, the frame is not black
+              if (yValue > threshold) {
+                  return false;
+              }
+          }
+      }
+
+      // All Y values are below or equal to the threshold
+      return true;
+  }
+
  public:
   void OnFrame(const webrtc::VideoFrame& frame) {
 
-    if (!received_frame_) {
+    if (!received_frame_ && !isVideoFrameBlack(frame)) {
       rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer(
           frame.video_frame_buffer());
       RTC_LOG(LS_INFO) << "Received video frame (" << buffer->type() << ") "
@@ -212,15 +242,29 @@ class LlamaVideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
         size_t uv_size = i420_buffer->StrideU() * i420_buffer->ChromaHeight();
 
         if(webrtc::SpeechAudioDeviceFactory::llama()) {
+          YUVData yuv_data;
+          yuv_data.width = i420_buffer->width();
+          yuv_data.height = i420_buffer->height();
+          yuv_data.y_size = y_size;
+          yuv_data.uv_size = uv_size;
+          yuv_data.y = std::make_unique<uint8_t[]>(y_size);
+          std::memcpy(yuv_data.y.get(), i420_buffer->DataY(), y_size);
+          yuv_data.u = std::make_unique<uint8_t[]>(uv_size);
+          std::memcpy(yuv_data.u.get(), i420_buffer->DataU(), uv_size);
+          yuv_data.v = std::make_unique<uint8_t[]>(uv_size);
+          std::memcpy(yuv_data.v.get(), i420_buffer->DataV(), uv_size);
+#if !TARGET_OS_IOS && !TARGET_OS_OSX
+          save_yuv_as_bmp(yuv_data, "clip_in_askWithYUVRaw.bmp");
+#endif
           webrtc::SpeechAudioDeviceFactory::llama()->askWithYUVRaw(
             "Please describe the image",
-            i420_buffer->DataY(),
-              i420_buffer->DataU(),
-              i420_buffer->DataV(),
-              i420_buffer->width(),
-              i420_buffer->height(),
-              y_size,
-              uv_size);    
+            yuv_data.y.get(),
+            yuv_data.u.get(),
+            yuv_data.v.get(),
+            yuv_data.width,
+            yuv_data.height,
+            yuv_data.y_size,
+            yuv_data.uv_size);    
           }
       }
 

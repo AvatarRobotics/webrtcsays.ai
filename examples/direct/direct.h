@@ -431,6 +431,12 @@ class DIRECT_API DirectCaller : public DirectPeer {
 
   // Connect and send messages
   bool Connect();
+
+  bool Connect(const char* ip, int port);
+#if TARGET_OS_IOS || TARGET_OS_OSX
+  bool ConnectWithBonjourName(const char* bonjour_name);
+#endif // #if TARGET_OS_IOS || TARGET_OS_OSX
+
   // bool SendMessage(const std::string& message);
   virtual void Disconnect() override;
 
