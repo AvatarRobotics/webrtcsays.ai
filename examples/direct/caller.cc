@@ -177,7 +177,7 @@ void DirectCaller::OnMessage(rtc::AsyncPacketSocket* socket,
 }
 
 void DirectCaller::Disconnect() {
-    RTC_LOG(LS_INFO) << "Caller signaling disconnect, sending CANCEL.";
+    RTC_LOG(LS_INFO) << "Caller signaling disconnect, sending CANCEL due to connection timeout.";
     // Update timestamp *before* signaling/shutdown
     last_disconnect_time_ = std::chrono::steady_clock::now(); 
     if (SendMessage("CANCEL")) { // Send CANCEL to signal disconnect without shutdown
@@ -186,7 +186,7 @@ void DirectCaller::Disconnect() {
         RTC_LOG(LS_WARNING) << "Failed to send CANCEL message.";
     }
     // Initiate the PeerConnection close process directly via the virtual method
-    RTC_LOG(LS_INFO) << "Calling ShutdownInternal to close PeerConnection.";
+    RTC_LOG(LS_INFO) << "Calling ShutdownInternal to close PeerConnection. Consider delaying this call if reconnection is desired.";
     ShutdownInternal(); 
     // // Call the base class Disconnect to close the socket and reset PeerConnection
     // DirectApplication::Disconnect(); // REMOVED - Let ShutdownInternal handle PC, external logic handles socket if needed after Wait

@@ -228,7 +228,7 @@ class LlamaVideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
  public:
   void OnFrame(const webrtc::VideoFrame& frame) {
 
-    if (!received_frame_ && !isVideoFrameBlack(frame)) {
+    if (1) { //!isVideoFrameBlack(frame)) {
       rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer(
           frame.video_frame_buffer());
       RTC_LOG(LS_INFO) << "Received video frame (" << buffer->type() << ") "
@@ -241,21 +241,22 @@ class LlamaVideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
         size_t y_size = i420_buffer->StrideY() * i420_buffer->height();
         size_t uv_size = i420_buffer->StrideU() * i420_buffer->ChromaHeight();
 
-        if(webrtc::SpeechAudioDeviceFactory::llama()) {
-          YUVData yuv_data;
-          yuv_data.width = i420_buffer->width();
-          yuv_data.height = i420_buffer->height();
-          yuv_data.y_size = y_size;
-          yuv_data.uv_size = uv_size;
-          yuv_data.y = std::make_unique<uint8_t[]>(y_size);
-          std::memcpy(yuv_data.y.get(), i420_buffer->DataY(), y_size);
-          yuv_data.u = std::make_unique<uint8_t[]>(uv_size);
-          std::memcpy(yuv_data.u.get(), i420_buffer->DataU(), uv_size);
-          yuv_data.v = std::make_unique<uint8_t[]>(uv_size);
-          std::memcpy(yuv_data.v.get(), i420_buffer->DataV(), uv_size);
-#if !TARGET_OS_IOS && !TARGET_OS_OSX
-          save_yuv_as_bmp(yuv_data, "clip_in_askWithYUVRaw.bmp");
+        YUVData yuv_data;
+        yuv_data.width = i420_buffer->width();
+        yuv_data.height = i420_buffer->height();
+        yuv_data.y_size = y_size;
+        yuv_data.uv_size = uv_size;
+        yuv_data.y = std::make_unique<uint8_t[]>(y_size);
+        std::memcpy(yuv_data.y.get(), i420_buffer->DataY(), y_size);
+        yuv_data.u = std::make_unique<uint8_t[]>(uv_size);
+        std::memcpy(yuv_data.u.get(), i420_buffer->DataU(), uv_size);
+        yuv_data.v = std::make_unique<uint8_t[]>(uv_size);
+        std::memcpy(yuv_data.v.get(), i420_buffer->DataV(), uv_size);
+#if TARGET_OS_OSX
+        save_yuv_as_bmp(yuv_data, "clip_in_askWithYUVRaw.bmp");
 #endif
+
+        if(webrtc::SpeechAudioDeviceFactory::llama()) {
           webrtc::SpeechAudioDeviceFactory::llama()->askWithYUVRaw(
             "Please describe the image",
             yuv_data.y.get(),

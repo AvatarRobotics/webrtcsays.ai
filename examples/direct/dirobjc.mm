@@ -10,7 +10,8 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#import "direct.h"
+#include "direct.h"
+#include "option.h"
 
 #if TARGET_OS_IOS && defined(__OBJC__)
 #include <memory>
@@ -30,6 +31,7 @@ void DirectApplication::SetVideoCapturer(RTCVideoCapturer* capturer) {
   // Wrap adapter in a native VideoTrackSource
   auto native_source = rtc::make_ref_counted<webrtc::ObjCVideoTrackSource>(adapter);
   // Hand it to the C++ engine
+  RTC_LOG(LS_INFO) << "SetVideoCapturer:: SetVideoSource by ObjCVideoTrackSource";
   SetVideoSource(native_source);
 }
 
@@ -38,6 +40,7 @@ void DirectApplication::SetVideoRenderer(RTCMTLVideoView* renderer) {
   std::unique_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> native_sink =
       std::make_unique<webrtc::ObjCVideoRenderer>(renderer);
   // Hand it to the C++ engine
+  RTC_LOG(LS_INFO) << "SetVideoRenderer:: SetVideoSink by ObjCVideoRenderer";
   SetVideoSink(std::move(native_sink));
 }
 #endif  // #if TARGET_OS_IOS && defined(__OBJC__)
@@ -78,19 +81,19 @@ IPAddressResult GetLocalIPAddress() {
     std::string selectedInterface;
 
     if (getifaddrs(&ifaddr) == -1) {
-        std::cerr << "getifaddrs failed: " << strerror(errno) << std::endl;
+        RTC_LOG(LS_ERROR) << "getifaddrs failed: " << strerror(errno);
         return {"", false};
     }
 
     // Debug: Log all interfaces
-    std::cout << "Available interfaces:" << std::endl;
+    RTC_LOG(LS_INFO) << "Available interfaces:";
     for (ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
         if (ifa->ifa_addr == nullptr) continue;
         if (ifa->ifa_addr->sa_family == AF_INET) {
             inet_ntop(AF_INET, &((struct sockaddr_in *)ifa->ifa_addr)->sin_addr, ip, INET_ADDRSTRLEN);
-            std::cout << "Interface: " << ifa->ifa_name << ", IP: " << ip
+            RTC_LOG(LS_INFO) << "Interface: " << ifa->ifa_name << ", IP: " << ip
                       << ", Flags: " << (ifa->ifa_flags & IFF_LOOPBACK ? "LOOPBACK" : "")
-                      << (ifa->ifa_flags & IFF_UP ? "UP" : "") << std::endl;
+                      << (ifa->ifa_flags & IFF_UP ? "UP" : "");
             ip[0] = '\0';
         }
     }
@@ -112,7 +115,7 @@ IPAddressResult GetLocalIPAddress() {
             inet_ntop(AF_INET, &sin->sin_addr, ip, INET_ADDRSTRLEN);
             isWiFi = true;  // Assume en* interfaces are Wi-Fi/Ethernet (suitable for Bonjour)
             selectedInterface = ifa->ifa_name;
-            std::cout << "Selected interface: " << ifa->ifa_name << ", IP: " << ip << " (Network)" << std::endl;
+            RTC_LOG(LS_INFO) << "Selected interface: " << ifa->ifa_name << ", IP: " << ip << " (Network)";
             break;
         }
     }
@@ -128,7 +131,7 @@ IPAddressResult GetLocalIPAddress() {
                 inet_ntop(AF_INET, &sin->sin_addr, ip, INET_ADDRSTRLEN);
                 isWiFi = false;
                 selectedInterface = ifa->ifa_name;
-                std::cout << "Selected fallback interface: " << ifa->ifa_name << ", IP: " << ip << " (Fallback)" << std::endl;
+                RTC_LOG(LS_INFO) << "Selected fallback interface: " << ifa->ifa_name << ", IP: " << ip << " (Fallback)";
                 break;
             }
         }
@@ -136,7 +139,7 @@ IPAddressResult GetLocalIPAddress() {
 
     freeifaddrs(ifaddr);
     if (ip[0] == '\0') {
-        std::cerr << "No valid IP found" << std::endl;
+        RTC_LOG(LS_ERROR) << "No valid IP found";
     }
     return {ip, isWiFi};
 }
@@ -150,13 +153,13 @@ bool DIRECT_API AdvertiseBonjourService(const std::string& name, int port) {
     // Get the local IP and Wi-Fi flag
     IPAddressResult ipResult = GetLocalIPAddress();
     if (ipResult.ip.empty()) {
-        std::cerr << "Failed to retrieve a valid IP address for Bonjour advertising" << std::endl;
+        RTC_LOG(LS_ERROR) << "Failed to retrieve a valid IP address for Bonjour advertising";
         return false;
     }
 
     // Prefer network interfaces for Bonjour, but allow fallback
     if (!ipResult.isWiFi) {
-        std::cout << "Warning: Using fallback interface for Bonjour advertising (may have limited discoverability)" << std::endl;
+        RTC_LOG(LS_WARNING) << "Warning: Using fallback interface for Bonjour advertising (may have limited discoverability)";
     }
 
     // Sanitize service name
@@ -173,19 +176,19 @@ bool DIRECT_API AdvertiseBonjourService(const std::string& name, int port) {
     }
     // Fallback if empty or invalid
     if (service_name.empty()) {
-        std::cerr << "Service name is empty or invalid after sanitization" << std::endl;
+        RTC_LOG(LS_ERROR) << "Service name is empty or invalid after sanitization";
         return false;
     }
 
     // Get system hostname for logging purposes
     char sys_hostname[256];
     if (gethostname(sys_hostname, sizeof(sys_hostname)) != 0) {
-        std::cerr << "gethostname failed: " << strerror(errno) << std::endl;
+        RTC_LOG(LS_ERROR) << "gethostname failed: " << strerror(errno);
         sys_hostname[0] = '\0';
     }
     
     std::string sys_hostname_str(sys_hostname);
-    std::cout << "System hostname: " << (sys_hostname_str.empty() ? "empty" : sys_hostname_str) << std::endl;
+    RTC_LOG(LS_INFO) << "System hostname: " << (sys_hostname_str.empty() ? "empty" : sys_hostname_str);
 
     // Create TXT record with IP
     std::string txt_record = "ip=" + ipResult.ip;
@@ -198,18 +201,18 @@ bool DIRECT_API AdvertiseBonjourService(const std::string& name, int port) {
             memcpy(txt_buffer + 1, txt_record.c_str(), len);
             txt_len = len + 1;
         } else {
-            std::cerr << "TXT record too long: " << txt_record << std::endl;
+            RTC_LOG(LS_ERROR) << "TXT record too long: " << txt_record;
             txt_len = 0;
         }
     }
 
     // Log parameters for debugging
-    std::cout << "Registering Bonjour service:" << std::endl;
-    std::cout << "  Name: " << service_name << std::endl;
-    std::cout << "  Type: _webrtcsays._tcp" << std::endl;
-    std::cout << "  Port: " << port << std::endl;
-    std::cout << "  Host: (system default)" << std::endl;
-    std::cout << "  TXT: " << (txt_len ? txt_record : "none") << std::endl;
+    RTC_LOG(LS_INFO) << "Registering Bonjour service:";
+    RTC_LOG(LS_INFO) << "  Name: " << service_name;
+    RTC_LOG(LS_INFO) << "  Type: _webrtcsays._tcp";
+    RTC_LOG(LS_INFO) << "  Port: " << port;
+    RTC_LOG(LS_INFO) << "  Host: (system default)";
+    RTC_LOG(LS_INFO) << "  TXT: " << (txt_len ? txt_record : "none");
 
     // Advertise as _webrtcsays._tcp.local.
     // Use nullptr for hostname to let mDNS use the system's resolvable hostname
@@ -229,29 +232,28 @@ bool DIRECT_API AdvertiseBonjourService(const std::string& name, int port) {
     );
 
     if (err != kDNSServiceErr_NoError) {
-        std::cerr << "Bonjour advertise failed: " << err;
+        RTC_LOG(LS_ERROR) << "Bonjour advertise failed: " << err;
         switch (err) {
             case kDNSServiceErr_BadParam:
-                std::cerr << " (Bad parameter)";
+                RTC_LOG(LS_ERROR) << " (Bad parameter)"; 
                 break;
             case kDNSServiceErr_NameConflict:
-                std::cerr << " (Name conflict)";
+                RTC_LOG(LS_ERROR) << " (Name conflict)";
                 break;
             case kDNSServiceErr_NoMemory:
-                std::cerr << " (Out of memory)";
+                RTC_LOG(LS_ERROR) << " (Out of memory)";
                 break;
             default:
-                std::cerr << " (Unknown error)";
+                RTC_LOG(LS_ERROR) << " (Unknown error)";
                 break;
         }
-        std::cerr << std::endl;
-        std::cerr << "Parameters: Name=" << service_name << ", Type=_webrtcsays._tcp, Port=" << port
-                  << ", Host=(system default), TXT=" << (txt_len ? txt_record : "none") << std::endl;
+        RTC_LOG(LS_ERROR) << "Parameters: Name=" << service_name << ", Type=_webrtcsays._tcp, Port=" << port
+                  << ", Host=(system default), TXT=" << (txt_len ? txt_record : "none");
         return false;
     }
 
-    std::cout << "Bonjour advertised as '" << service_name << "' on port " << port << std::endl;
-    std::cout << " Advertising on IP: " << ipResult.ip << " (" << (ipResult.isWiFi ? "Wi-Fi" : "Non-Wi-Fi") << ")" << std::endl;
+    RTC_LOG(LS_INFO) << "Bonjour advertised as '" << service_name << "' on port " << port;
+    RTC_LOG(LS_INFO) << " Advertising on IP: " << ipResult.ip << " (" << (ipResult.isWiFi ? "Wi-Fi" : "Non-Wi-Fi") << ")";
 
     // Run the service in a background thread
     std::thread([]{
@@ -286,9 +288,9 @@ static void DNSSD_API resolve_callback(
 {
     BonjourDiscoveryContext* ctx = static_cast<BonjourDiscoveryContext*>(context);
     if (errorCode == kDNSServiceErr_NoError) {
-        std::cout << "[Resolve] Full name: " << (fullname ? fullname : "null") << std::endl;
-        std::cout << "[Resolve] Host target: " << (hosttarget ? hosttarget : "null") << std::endl;
-        std::cout << "[Resolve] Port: " << ntohs(port) << std::endl;
+        RTC_LOG(LS_INFO) << "[Resolve] Full name: " << (fullname ? fullname : "null");
+        RTC_LOG(LS_INFO) << "[Resolve] Host target: " << (hosttarget ? hosttarget : "null");
+        RTC_LOG(LS_INFO) << "[Resolve] Port: " << ntohs(port);
         
         // First try to extract IP from TXT record
         std::string ip_from_txt;
@@ -302,7 +304,7 @@ static void DNSSD_API resolve_callback(
                     std::string entry(reinterpret_cast<const char*>(ptr), len);
                     if (entry.substr(0, 3) == "ip=") {
                         ip_from_txt = entry.substr(3);
-                        std::cout << "[Resolve] Found IP in TXT: " << ip_from_txt << std::endl;
+                        RTC_LOG(LS_INFO) << "[Resolve] Found IP in TXT: " << ip_from_txt;
                         break;
                     }
                 }
@@ -316,10 +318,10 @@ static void DNSSD_API resolve_callback(
             ctx->found_port = ntohs(port);
             ctx->found = true;
             ctx->cv.notify_all();
-            std::cout << "[Resolve] Success via TXT: " << ctx->found_ip << ":" << ctx->found_port << std::endl;
+            RTC_LOG(LS_INFO) << "[Resolve] Success via TXT: " << ctx->found_ip << ":" << ctx->found_port;
         } else if (hosttarget) {
             // Fallback: resolve hosttarget to IP
-            std::cout << "[Resolve] Attempting to resolve hostname: " << hosttarget << std::endl;
+            RTC_LOG(LS_INFO) << "[Resolve] Attempting to resolve hostname: " << hosttarget;
             struct addrinfo hints = {0, AF_INET, SOCK_STREAM, 0, 0, 0, 0, nullptr};
             // hints.ai_family = AF_INET;
             // hints.ai_socktype = SOCK_STREAM;
@@ -333,13 +335,13 @@ static void DNSSD_API resolve_callback(
                 freeaddrinfo(res);
                 ctx->found = true;
                 ctx->cv.notify_all();
-                std::cout << "[Resolve] Success via hostname: " << ctx->found_ip << ":" << ctx->found_port << std::endl;
+                RTC_LOG(LS_INFO) << "[Resolve] Success via hostname: " << ctx->found_ip << ":" << ctx->found_port;
             } else {
-                std::cout << "[Resolve] Failed to resolve hostname: " << hosttarget << std::endl;
+                RTC_LOG(LS_ERROR) << "[Resolve] Failed to resolve hostname: " << hosttarget;
             }
         }
     } else {
-        std::cout << "[Resolve] Error: " << errorCode << std::endl;
+        RTC_LOG(LS_ERROR) << "[Resolve] Error: " << errorCode;
     }
 }
 
@@ -356,23 +358,23 @@ static void DNSSD_API browse_callback(
     BonjourDiscoveryContext* ctx = static_cast<BonjourDiscoveryContext*>(context);
     
     if (errorCode != kDNSServiceErr_NoError) {
-        std::cout << "[Browse] Error: " << errorCode << std::endl;
+        RTC_LOG(LS_ERROR) << "[Browse] Error: " << errorCode;
         return;
     }
     
     if (!ctx || !serviceName) {
-        std::cout << "[Browse] Invalid context or service name" << std::endl;
+        RTC_LOG(LS_ERROR) << "[Browse] Invalid context or service name";
         return;
     }
     
-    std::cout << "[Browse] Found service: '" << serviceName << "' in domain: " << (replyDomain ? replyDomain : "null") << std::endl;
-    std::cout << "[Browse] Looking for: '" << ctx->target_name << "'" << std::endl;
+    RTC_LOG(LS_INFO) << "[Browse] Found service: '" << serviceName << "' in domain: " << (replyDomain ? replyDomain : "null");
+    RTC_LOG(LS_INFO) << "[Browse] Looking for: '" << ctx->target_name << "'";
     
     // Check if this is the service we're looking for
     bool isTargetService = (ctx->target_name == serviceName);
     
     if (isTargetService || ctx->target_name.empty()) {
-        std::cout << "[Browse] " << (isTargetService ? "Target service found" : "Resolving first available service") << std::endl;
+        RTC_LOG(LS_INFO) << "[Browse] " << (isTargetService ? "Target service found" : "Resolving first available service");
         
         DNSServiceRef resolveRef = nullptr;
         DNSServiceErrorType err = DNSServiceResolve(
@@ -386,14 +388,14 @@ static void DNSSD_API browse_callback(
             context);
             
         if (err == kDNSServiceErr_NoError) {
-            std::cout << "[Browse] Starting resolution..." << std::endl;
+            RTC_LOG(LS_INFO) << "[Browse] Starting resolution...";
             // Process the resolve operation with timeout
             auto start_time = std::chrono::steady_clock::now();
             while (!ctx->found && 
                    std::chrono::steady_clock::now() - start_time < std::chrono::seconds(5)) {
                 DNSServiceErrorType processErr = DNSServiceProcessResult(resolveRef);
                 if (processErr != kDNSServiceErr_NoError) {
-                    std::cout << "[Browse] Process result error: " << processErr << std::endl;
+                    RTC_LOG(LS_ERROR) << "[Browse] Process result error: " << processErr;
                     break;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -401,20 +403,20 @@ static void DNSSD_API browse_callback(
             DNSServiceRefDeallocate(resolveRef);
             
             if (ctx->found) {
-                std::cout << "[Browse] Resolution completed successfully" << std::endl;
+                RTC_LOG(LS_INFO) << "[Browse] Resolution completed successfully";
             } else {
-                std::cout << "[Browse] Resolution timed out" << std::endl;
+                RTC_LOG(LS_ERROR) << "[Browse] Resolution timed out";
             }
         } else {
-            std::cout << "[Browse] DNSServiceResolve failed: " << err << std::endl;
+            RTC_LOG(LS_ERROR) << "[Browse] DNSServiceResolve failed: " << err;
         }
     } else {
-        std::cout << "[Browse] Skipping service (not target): " << serviceName << std::endl;
+        RTC_LOG(LS_INFO) << "[Browse] Skipping service (not target): " << serviceName;
     }
 }
 
 bool DIRECT_API DiscoverBonjourService(const std::string& name, std::string& out_ip, int& out_port, int timeout_seconds) {
-    std::cout << "[Discovery] Starting Bonjour discovery for: '" << name << "'" << std::endl;
+    RTC_LOG(LS_INFO) << "[Discovery] Starting Bonjour discovery for: '" << name << "'";
     
     BonjourDiscoveryContext ctx;
     ctx.target_name = name;
@@ -430,11 +432,11 @@ bool DIRECT_API DiscoverBonjourService(const std::string& name, std::string& out
         &ctx);
         
     if (err != kDNSServiceErr_NoError) {
-        std::cerr << "[Discovery] Bonjour browse failed: " << err << std::endl;
+        RTC_LOG(LS_ERROR) << "[Discovery] Bonjour browse failed: " << err;
         return false;
     }
     
-    std::cout << "[Discovery] Browse started, waiting for results..." << std::endl;
+    RTC_LOG(LS_INFO) << "[Discovery] Browse started, waiting for results...";
     
     // Wait for result or timeout
     int effective_timeout = timeout_seconds > 0 ? timeout_seconds : 15;
@@ -444,7 +446,7 @@ bool DIRECT_API DiscoverBonjourService(const std::string& name, std::string& out
     while (!ctx.found && std::chrono::steady_clock::now() - start < timeout_duration) {
         DNSServiceErrorType processErr = DNSServiceProcessResult(browseRef);
         if (processErr != kDNSServiceErr_NoError) {
-            std::cout << "[Discovery] Process result error: " << processErr << std::endl;
+            RTC_LOG(LS_ERROR) << "[Discovery] Process result error: " << processErr;
             break;
         }
         
@@ -453,7 +455,7 @@ bool DIRECT_API DiscoverBonjourService(const std::string& name, std::string& out
         
         // Check if we found something
         if (ctx.found) {
-            std::cout << "[Discovery] Service found and resolved!" << std::endl;
+            RTC_LOG(LS_INFO) << "[Discovery] Service found and resolved!";
             break;
         }
     }
@@ -463,10 +465,10 @@ bool DIRECT_API DiscoverBonjourService(const std::string& name, std::string& out
     if (ctx.found) {
         out_ip = ctx.found_ip;
         out_port = ctx.found_port;
-        std::cout << "[Discovery] Success: " << out_ip << ":" << out_port << std::endl;
+        RTC_LOG(LS_INFO) << "[Discovery] Success: " << out_ip << ":" << out_port;
         return true;
     } else {
-        std::cout << "[Discovery] Timeout: No service found within " << effective_timeout << " seconds" << std::endl;
+        RTC_LOG(LS_ERROR) << "[Discovery] Timeout: No service found within " << effective_timeout << " seconds";
         return false;
     }
 }

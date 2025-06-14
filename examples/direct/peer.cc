@@ -448,7 +448,7 @@ void DirectPeer::OnIceConnectionChange(webrtc::PeerConnectionInterface::IceConne
 
 // Method for external logic to wait for the closed signal
 bool DirectPeer::WaitUntilConnectionClosed(int give_up_after_ms) {
-    RTC_LOG(LS_INFO) << "Waiting for connection closed event...";
+    RTC_LOG(LS_VERBOSE) << "Waiting for connection closed event...";
     
     // Check should_quit_ immediately and periodically during wait
     if (should_quit_) {
@@ -476,7 +476,7 @@ bool DirectPeer::WaitUntilConnectionClosed(int give_up_after_ms) {
     }
     
     // Timeout reached
-    RTC_LOG(LS_INFO) << "Wait timeout reached or quit requested";
+    RTC_LOG(LS_VERBOSE) << "Wait timeout reached or quit requested";
     return false;
 }
 

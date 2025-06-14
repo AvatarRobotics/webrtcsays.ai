@@ -181,6 +181,9 @@ void DirectApplication::Disconnect() {
   }
   // peer_connection_factory_ = nullptr; // Keep factory alive for reconnection
 
+  // Keep video source and sink alive for potential reconnection
+  RTC_LOG(LS_INFO) << "Keeping video source and sink for potential reconnection.";
+
   // Reset message sequence counters for potential reconnection
   ice_candidates_sent_ = 0;
   ice_candidates_received_ = 0;
@@ -477,8 +480,13 @@ bool DirectApplication::CreatePeerConnection() {
               int port = atoi(host_port.substr(colon_pos + 1).c_str());
               stun_servers.insert(rtc::SocketAddress(host, port));
           }
-      } else if (server.uri.find("turn:") == 0) {
-          std::string host_port = server.uri.substr(5);
+      } else if (server.uri.find("turn:") == 0 || server.uri.find("turns:") == 0) {
+          std::string host_port = server.uri.substr(server.uri.find(":") + 1);
+          // Strip off any query parameters
+          size_t query_pos = host_port.find('?');
+          if (query_pos != std::string::npos) {
+              host_port = host_port.substr(0, query_pos);
+          }
           size_t colon_pos = host_port.find(':');
           if (colon_pos != std::string::npos) {
               cricket::RelayServerConfig turn_config;
@@ -489,6 +497,9 @@ bool DirectApplication::CreatePeerConnection() {
                       atoi(host_port.substr(colon_pos + 1).c_str())),
                   cricket::PROTO_UDP));
               turn_servers.push_back(turn_config);
+              RTC_LOG(LS_INFO) << "TURN server parsed: " << host_port << " for URI: " << server.uri;
+          } else {
+              RTC_LOG(LS_WARNING) << "Failed to parse TURN server port from URI: " << server.uri;
           }
       }
   }
@@ -554,6 +565,23 @@ bool DirectApplication::CreatePeerConnection() {
   RTC_DCHECK(pcf_result.ok());    
   peer_connection_ = pcf_result.MoveValue();
   RTC_LOG(LS_INFO) << "PeerConnection created successfully.";
+
+  // Add video track if we have a video source
+  if (video_source_) {
+    RTC_LOG(LS_INFO) << "Adding video track from stored source. Source pointer: " << video_source_.get();
+    rtc::scoped_refptr<webrtc::VideoTrackInterface> video_track(
+        peer_connection_factory_->CreateVideoTrack(video_source_, "video_track"));
+    video_track_ = video_track;
+    auto result = peer_connection_->AddTrack(video_track, {"stream1"});
+    if (!result.ok()) {
+      RTC_LOG(LS_ERROR) << "Failed to add video track to PeerConnection: " << result.error().message();
+    } else {
+      RTC_LOG(LS_INFO) << "Video track added successfully to PeerConnection.";
+      RTC_LOG(LS_INFO) << "Monitoring video source for frame delivery.";
+    }
+  } else {
+    RTC_LOG(LS_WARNING) << "No video source available to add as a track. Video transmission will not occur.";
+  }
 
   return true;
 }
@@ -648,12 +676,17 @@ void DirectApplication::OnAddTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterfa
         auto* video_track = static_cast<webrtc::VideoTrackInterface*>(receiver->track().get());
         
         // Ensure we don't add multiple sinks
-        if(!video_sink_ && opts_.llama) {
-            video_sink_ = std::make_unique<webrtc::LlamaVideoRenderer>();
+        if(!video_sink_ && opts_.video) {
+          RTC_LOG(LS_INFO) << "Initializing video sink...";
+          video_sink_ = std::make_unique<webrtc::LlamaVideoRenderer>();
         }
         
         if (video_sink_) {
+            RTC_LOG(LS_INFO) << "Attaching video sink to track: " << receiver->track()->id();
             video_track->AddOrUpdateSink(video_sink_.get(), rtc::VideoSinkWants());
+            RTC_LOG(LS_INFO) << "Checking if video source is providing frames...";
+        } else {
+            RTC_LOG(LS_ERROR) << "Video sink is still nullptr, cannot attach to track: " << receiver->track()->id();
         }
     } else if (receiver->track()->kind() == webrtc::MediaStreamTrackInterface::kAudioKind) {
         RTC_LOG(LS_INFO) << "Audio track added.";
@@ -685,7 +718,10 @@ bool DirectApplication::SetVideoSource(
       video_source_ = video_source;
   }
 
-  RTC_LOG(LS_INFO) << "Video source set for " << (is_caller() ? "caller" : "callee");
+  RTC_LOG(LS_INFO) << "Video source set for " << (is_caller() ? "caller" : "callee") << ", source pointer: " << video_source_.get();
+  if (!video_source_) {
+    RTC_LOG(LS_WARNING) << "Warning: Video source is nullptr, no video will be sent.";
+  }
   return true;
 }
 
