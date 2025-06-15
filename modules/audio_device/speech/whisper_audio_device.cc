@@ -53,7 +53,7 @@ void ttsAudioCallback(bool success, const uint16_t* buffer, size_t buffer_size, 
   // Handle audio buffer here
   if(success) {
     WhisperAudioDevice* audio_device = static_cast<WhisperAudioDevice*>(user_data);
-    RTC_LOG(LS_INFO) << "Generated " << buffer_size << " audio samples (" 
+    RTC_LOG(LS_VERBOSE) << "Generated " << buffer_size << " audio samples (" 
       << buffer_size / 16000 << " s)";
     audio_device->SetTTSBuffer(buffer, buffer_size);
   }
