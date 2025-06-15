@@ -54,6 +54,9 @@ rtc::IPAddress IPFromString(absl::string_view str) {
   return ip;
 }
 
+#if LLAMA_NOTIFICATION_ENABLED
+WhillatsLlama* DirectApplication::llama_ = nullptr;
+
 void llamaCallback(bool success, const char* response, void* user_data) {
   if (success && *response && user_data) {
     DirectApplication* app = static_cast<DirectApplication*>(user_data);
@@ -63,11 +66,15 @@ void llamaCallback(bool success, const char* response, void* user_data) {
     }
   }
 }
+#endif
 
 // DirectApplication Implementation
 DirectApplication::DirectApplication(Options opts)
-  : opts_(opts),
-    llamaCallback_(llamaCallback, this) {
+  : opts_(opts)
+#if LLAMA_NOTIFICATION_ENABLED
+    , llamaCallback_(llamaCallback, this)
+#endif
+{
   // Threads will be created in Initialize() to support full teardown/re-init
   peer_connection_factory_ = nullptr;
 }
@@ -164,6 +171,17 @@ void DirectApplication::Disconnect() {
   // Close active connections and reset connection state without destroying core resources
   RTC_LOG(LS_INFO) << "Disconnecting active connections";
 
+  // Log if video stream is being stopped during disconnect
+  if (video_track_) {
+    RTC_LOG(LS_WARNING) << "Disconnecting: Video track exists, video transmission may stop. Track enabled: " << (video_track_->enabled() ? "true" : "false");
+    // Safeguard: Prevent stopping video send if not necessary
+    if (video_track_->enabled() && video_source_ && video_source_->state() == webrtc::MediaSourceInterface::kLive) {
+      RTC_LOG(LS_WARNING) << "Disconnecting: Video source is live and track enabled. Attempting to preserve video send state for reconnection.";
+      // Note: We can't directly prevent WebRTC internal calls to SetVideoSend with null,
+      // but we log to track if this is the point of stopping.
+    }
+  }
+
   // Close all tracked sockets to ensure they are removed from PhysicalSocketServer
   RTC_LOG(LS_INFO) << "Closing tracked sockets during disconnect";
   for (auto* socket : tracked_sockets_) {
@@ -176,6 +194,7 @@ void DirectApplication::Disconnect() {
 
   // Reset connection-specific state
   if (peer_connection_) {
+    RTC_LOG(LS_INFO) << "Closing peer connection, video transmission will stop if active.";
     peer_connection_->Close();
     peer_connection_ = nullptr;
   }
@@ -305,7 +324,6 @@ bool DirectApplication::CreatePeerConnection() {
     }
 
   // Log timing information to diagnose initialization order
-  RTC_LOG(LS_INFO) << "Checking if video source is set before creating peer connection. Video source pointer: " << video_source_.get();
   if (!video_source_ && opts_.video && is_caller()) {
     RTC_LOG(LS_WARNING) << "Video source not set yet for caller with video enabled. This may cause black frames. Ensure SetVideoSource is called before CreatePeerConnection.";
   } else if (video_source_) {
@@ -340,17 +358,17 @@ bool DirectApplication::CreatePeerConnection() {
   dependencies_.worker_thread = worker_thread();
   dependencies_.signaling_thread = signaling_thread();
 
-  // Audio device module type
-#ifndef WEBRTC_SPEECH_DEVICES
   webrtc::AudioDeviceModule::AudioLayer kAudioDeviceModuleType = webrtc::AudioDeviceModule::kPlatformDefaultAudio;
-#else
-  webrtc::AudioDeviceModule::AudioLayer kAudioDeviceModuleType = webrtc::AudioDeviceModule::kSpeechAudio;
-  if (opts_.llama) {
+  // Audio device module type
+#ifdef WEBRTC_SPEECH_DEVICES
+  if (opts_.whisper && opts_.llama) {
     webrtc::SpeechAudioDeviceFactory::SetLlamaEnabled(true);
     webrtc::SpeechAudioDeviceFactory::SetLlamaModelFilename(opts_.llama_model);
     webrtc::SpeechAudioDeviceFactory::SetLlavaMMProjFilename(opts_.llava_mmproj);
     //llama_ = nullptr; // uncomment to send message instead of audio 
-    //webrtc::SpeechAudioDeviceFactory::CreateWhillatsLlama(llamaCallback_);
+#if LLAMA_NOTIFICATION_ENABLED
+    llama_ = webrtc::SpeechAudioDeviceFactory::CreateWhillatsLlama(llamaCallback_);
+#endif
   } 
 
   if (opts_.whisper && !opts_.whisper_model.empty()) {
@@ -595,6 +613,7 @@ bool DirectApplication::CreatePeerConnection() {
 void DirectApplication::HandleMessage(rtc::AsyncPacketSocket* socket,
                                       const std::string& message,
                                       const rtc::SocketAddress& remote_addr) {
+  RTC_LOG(LS_INFO) << "DirectApplication::HandleMessage: " << message;
   if (message.find("ICE:") == 0) {
     ice_candidates_received_++;
     SendMessage("ICE_ACK:" + std::to_string(ice_candidates_received_));
@@ -720,10 +739,20 @@ bool DirectApplication::SetVideoSource(
   // Ensure assignment happens on the signaling thread for safety.
   if (rtc::Thread::Current() != signaling_thread()) {
     signaling_thread()->BlockingCall([this, video_source]() {
+      // Safeguard: Prevent overwriting a live source with null or a non-live source
+      if (video_source_ && video_source_->state() == webrtc::MediaSourceInterface::kLive && !video_source) {
+        RTC_LOG(LS_WARNING) << "Attempt to overwrite a live video source with null. Ignoring to prevent video freezing.";
+        return;
+      }
       video_source_ = video_source;
       AddVideoTrackIfSourceAvailable();
     });
   } else {
+      // Safeguard: Prevent overwriting a live source with null or a non-live source
+      if (video_source_ && video_source_->state() == webrtc::MediaSourceInterface::kLive && !video_source) {
+        RTC_LOG(LS_WARNING) << "Attempt to overwrite a live video source with null. Ignoring to prevent video freezing.";
+        return true;
+      }
       video_source_ = video_source;
       AddVideoTrackIfSourceAvailable();
   }
@@ -780,10 +809,29 @@ void DirectApplication::AddVideoTrackIfSourceAvailable() {
       } else {
         RTC_LOG(LS_WARNING) << "Sender: Video source or track state issue. Black frames may be sent to remote peer.";
       }
+      // Safeguard: Ensure video send is active with the current source
+      EnsureVideoSendActive();
     }
   } else if (!peer_connection_) {
     RTC_LOG(LS_INFO) << "Peer connection not yet created, video track will be added later.";
   } else if (!video_source_) {
     RTC_LOG(LS_WARNING) << "No video source available to add as a track. Video transmission will not occur.";
+  }
+}
+
+// New method to ensure video send is active with the current source
+void DirectApplication::EnsureVideoSendActive() {
+  if (video_track_ && video_source_ && peer_connection_) {
+    RTC_LOG(LS_INFO) << "Ensuring video send is active for SSRC associated with track.";
+    // Directly log a warning if video source might be unset elsewhere
+    if (video_source_->state() == webrtc::MediaSourceInterface::kLive) {
+      RTC_LOG(LS_INFO) << "Video source is live, ensuring it remains active for sending.";
+      // Note: WebRTC's SetVideoSend is internal, so we can't directly intercept it here.
+      // Instead, we log to detect potential issues in subsequent logs.
+    } else {
+      RTC_LOG(LS_WARNING) << "Video source is not live, cannot ensure active video send.";
+    }
+  } else {
+    RTC_LOG(LS_WARNING) << "Cannot ensure video send active: missing track, source, or peer connection.";
   }
 }

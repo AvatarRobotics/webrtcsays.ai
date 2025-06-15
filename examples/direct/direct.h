@@ -96,6 +96,8 @@
 
 #include "option.h"
 
+#define LLAMA_NOTIFICATION_ENABLED 1
+
 #ifdef WEBRTC_SPEECH_DEVICES
 #include "modules/audio_device/speech/speech_audio_device_factory.h"
 #endif  // WEBRTC_SPEECH_DEVICES
@@ -205,17 +207,12 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
   // Allow host to inject a custom video source before starting
   virtual bool SetVideoSource(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> video_source);
 
-  // Add video track if source is available
-  void AddVideoTrackIfSourceAvailable();
-
   // Allow host to inject a custom video sink before starting
   virtual bool SetVideoSink(std::unique_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> video_sink);
 
-  // Set video capturer from Objective-C
-#if defined(WEBRTC_IOS) && defined(__OBJC__)
-  void SetVideoCapturer(RTC_OBJC_TYPE(RTCVideoCapturer)* capturer);
-  void SetVideoRenderer(RTC_OBJC_TYPE(RTCMTLVideoView)* renderer);
-#endif
+  // Add video track if source is available
+  void AddVideoTrackIfSourceAvailable();
+  void EnsureVideoSendActive();
 
  protected:
   Options opts_;  // Store command line options
@@ -328,7 +325,18 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
   // Track all sockets created by WrapSocket or CreateSocket
   std::vector<rtc::Socket*> tracked_sockets_;
 
+  // Set video capturer from Objective-C
+#if LLAMA_NOTIFICATION_ENABLED
+  static WhillatsLlama* llama_;
   WhillatsSetResponseCallback llamaCallback_;
+#endif
+
+#if defined(WEBRTC_IOS) && defined(__OBJC__)
+ public:
+  void SetVideoCapturer(RTC_OBJC_TYPE(RTCVideoCapturer)* capturer);
+  void SetVideoRenderer(RTC_OBJC_TYPE(RTCMTLVideoView)* renderer);
+#endif
+
 };
 
 class DIRECT_API DirectPeer : public DirectApplication {
