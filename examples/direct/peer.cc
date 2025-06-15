@@ -113,38 +113,29 @@ void DirectPeer::Start() {
         RTC_LOG(LS_INFO) << "Initial audio transceiver direction set for " << (is_caller() ? "caller" : "callee")
             << ", result:" << (adirection_result.ok() ? "success" : "failed");
     
-        // if video_source_ is not nullptr, create a video track
+        // Create a video track source for the caller.
         if (opts_.video) {
-            if (!video_source_) {
-                // Create a static periodic video source (local fake source)
-                auto static_source = rtc::make_ref_counted<webrtc::StaticPeriodicVideoTrackSource>(false);
-                if (opts_.llama && !opts_.llama_llava_yuv.empty()) {
-                    // Load custom YUV data if available
-                    RTC_LOG(LS_INFO) << "Loading YUV data from " << opts_.llama_llava_yuv;
-                    YUVData &yuv = webrtc::SpeechAudioDeviceFactory::GetYuvData();
-                    if(yuv.width > 0 && yuv.height > 0) {
-                        static_source->static_periodic_source().LoadYuvData(yuv);
-                    } else {
-                        RTC_LOG(LS_ERROR) << "Invalid YUV data";
-                    }
+            // Check if a video source is already set and live
+            rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> existing_source = video_source_;
+            if (existing_source && existing_source->state() == webrtc::MediaSourceInterface::kLive) {
+                RTC_LOG(LS_INFO) << "Existing video source is already set and live for caller. Not overwriting with StaticPeriodicVideoTrackSource.";
+            } else {
+                RTC_LOG(LS_INFO) << "Creating StaticPeriodicVideoTrackSource for " << (is_caller() ? "caller" : "callee");
+                video_source_ = new rtc::RefCountedObject<webrtc::StaticPeriodicVideoTrackSource>(false);
+                RTC_LOG(LS_INFO) << "StaticPeriodicVideoTrackSource created, state: " << (video_source_->state() == webrtc::MediaSourceInterface::kLive ? "Live" : "Not Live");
+                // Check if the source is producing frames
+                webrtc::StaticPeriodicVideoTrackSource* static_source = static_cast<webrtc::StaticPeriodicVideoTrackSource*>(video_source_.get());
+                RTC_LOG(LS_INFO) << "StaticPeriodicVideoTrackSource frame generation status: " << (static_source->is_running() ? "Running" : "Not Running");
+                // Attempt to start the source if not running
+                if (!static_source->is_running()) {
+                    RTC_LOG(LS_INFO) << "Attempting to start StaticPeriodicVideoTrackSource...";
+                    // Note: Assuming there might be a start method or similar; adjust based on actual API
+                    // static_source->static_periodic_source().Start(); // Uncomment if a start method exists
+                    RTC_LOG(LS_WARNING) << "No direct method to start StaticPeriodicVideoTrackSource. It may need initialization with video content or a specific start call.";
                 }
-                video_source_ = static_source;
-                RTC_LOG(LS_INFO) << "Created StaticPeriodicVideoTrackSource";
+                SetVideoSource(video_source_);
             }
-
-            video_track_ = peer_connection_factory_->CreateVideoTrack(video_source_, "video_track");
-            RTC_DCHECK(video_track_);
-
-            webrtc::RtpTransceiverInit vinit;
-            vinit.direction = webrtc::RtpTransceiverDirection::kSendRecv;
-            auto vt_result = peer_connection_->AddTransceiver(video_track_, vinit);
-            RTC_DCHECK(vt_result.ok());
-            auto vtransceiver = vt_result.value();
-
-            // Force the direction immediately after creation
-            auto vdirection_result = vtransceiver->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendRecv);
-            RTC_LOG(LS_INFO) << "Initial video transceiver direction set for " << (is_caller() ? "caller" : "callee")
-                << ", result:" << (vdirection_result.ok() ? "success" : "failed");
+            RTC_LOG(LS_INFO) << "Video source set for caller using SetVideoSource.";
         }
 
         webrtc::PeerConnectionInterface::RTCOfferAnswerOptions offer_options;
@@ -321,35 +312,23 @@ void DirectPeer::SetRemoteDescription(const std::string& sdp) {
                     RTC_LOG(LS_INFO) << "Initial audio transceiver direction set for callee, result: " \
                                      << (adirection_result.ok() ? "success" : "failed");
 
-                    // Add local video track for callee
+                    // Create a video track source for the callee if video is enabled.
                     if (opts_.video) {
-                        if (!video_source_) {
-                            // Create a static periodic video source (local fake source)
-                            auto static_source = rtc::make_ref_counted<webrtc::StaticPeriodicVideoTrackSource>(false);
-                            // Load custom YUV data if available
-                            if (opts_.llama && !opts_.llama_llava_yuv.empty()) {
-                                RTC_LOG(LS_INFO) << "Loading YUV data from " << opts_.llama_llava_yuv;
-                                YUVData &yuv = webrtc::SpeechAudioDeviceFactory::GetYuvData();
-                                if(yuv.width > 0 && yuv.height > 0) {
-                                    static_source->static_periodic_source().LoadYuvData(yuv);
-                                } else {
-                                    RTC_LOG(LS_ERROR) << "Invalid YUV data";
-                                }
-                            }
-                            video_source_ = static_source;
-                            RTC_LOG(LS_INFO) << "Created StaticPeriodicVideoTrackSource";
+                        RTC_LOG(LS_INFO) << "Creating StaticPeriodicVideoTrackSource for " << (is_caller() ? "caller" : "callee");
+                        video_source_ = new rtc::RefCountedObject<webrtc::StaticPeriodicVideoTrackSource>(false);
+                        RTC_LOG(LS_INFO) << "StaticPeriodicVideoTrackSource created, state: " << (video_source_->state() == webrtc::MediaSourceInterface::kLive ? "Live" : "Not Live");
+                        // Check if the source is producing frames
+                        webrtc::StaticPeriodicVideoTrackSource* static_source = static_cast<webrtc::StaticPeriodicVideoTrackSource*>(video_source_.get());
+                        RTC_LOG(LS_INFO) << "StaticPeriodicVideoTrackSource frame generation status: " << (static_source->is_running() ? "Running" : "Not Running");
+                        // Attempt to start the source if not running
+                        if (!static_source->is_running()) {
+                            RTC_LOG(LS_INFO) << "Attempting to start StaticPeriodicVideoTrackSource...";
+                            // Note: Assuming there might be a start method or similar; adjust based on actual API
+                            // static_source->static_periodic_source().Start(); // Uncomment if a start method exists
+                            RTC_LOG(LS_WARNING) << "No direct method to start StaticPeriodicVideoTrackSource. It may need initialization with video content or a specific start call.";
                         }
-
-                        video_track_ = peer_connection_factory_->CreateVideoTrack(video_source_, std::string("video_track"));
-                        RTC_DCHECK(video_track_.get());
-                        webrtc::RtpTransceiverInit vinit;
-                        vinit.direction = webrtc::RtpTransceiverDirection::kSendRecv;
-                        auto vt_result = peer_connection()->AddTransceiver(video_track_, vinit);
-                        RTC_DCHECK(vt_result.ok());
-                        auto vtransceiver = vt_result.value();
-                        auto vdirection_result = vtransceiver->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendRecv);
-                        RTC_LOG(LS_INFO) << "Initial video transceiver direction set for callee, result: " \
-                                         << (vdirection_result.ok() ? "success" : "failed");
+                        SetVideoSource(video_source_);
+                        RTC_LOG(LS_INFO) << "Video source set for callee using SetVideoSource.";
                     }
 
                     create_session_observer_ = rtc::make_ref_counted<LambdaCreateSessionDescriptionObserver>(

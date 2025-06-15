@@ -205,6 +205,9 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
   // Allow host to inject a custom video source before starting
   virtual bool SetVideoSource(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> video_source);
 
+  // Add video track if source is available
+  void AddVideoTrackIfSourceAvailable();
+
   // Allow host to inject a custom video sink before starting
   virtual bool SetVideoSink(std::unique_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> video_sink);
 

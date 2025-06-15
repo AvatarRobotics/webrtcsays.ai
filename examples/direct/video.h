@@ -148,6 +148,10 @@ class StaticPeriodicVideoSource final
     }
   }
 
+  bool is_running() const {
+    return repeating_task_handle_.Running();
+  }
+
  private:
   SequenceChecker thread_checker_{SequenceChecker::kDetached};
 
@@ -185,6 +189,8 @@ class StaticPeriodicVideoTrackSource : public VideoTrackSource {
   const StaticPeriodicVideoSource& static_periodic_source() const {
     return source_;
   }
+
+  bool is_running() const { return state() == webrtc::MediaSourceInterface::kLive; }
 
  protected:
   rtc::VideoSourceInterface<VideoFrame>* source() override { return &source_; }
@@ -228,7 +234,7 @@ class LlamaVideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
  public:
   void OnFrame(const webrtc::VideoFrame& frame) {
 
-    if (1) { //!isVideoFrameBlack(frame)) {
+    if (!isVideoFrameBlack(frame)) {
       rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer(
           frame.video_frame_buffer());
       RTC_LOG(LS_INFO) << "Received video frame (" << buffer->type() << ") "
@@ -252,9 +258,9 @@ class LlamaVideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
         std::memcpy(yuv_data.u.get(), i420_buffer->DataU(), uv_size);
         yuv_data.v = std::make_unique<uint8_t[]>(uv_size);
         std::memcpy(yuv_data.v.get(), i420_buffer->DataV(), uv_size);
-#if TARGET_OS_OSX
-        save_yuv_as_bmp(yuv_data, "clip_in_askWithYUVRaw.bmp");
-#endif
+// #if TARGET_OS_OSX
+//         save_yuv_as_bmp(yuv_data, "clip_in_askWithYUVRaw.bmp");
+// #endif
 
         if(webrtc::SpeechAudioDeviceFactory::llama()) {
           webrtc::SpeechAudioDeviceFactory::llama()->askWithYUVRaw(
@@ -270,6 +276,8 @@ class LlamaVideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
       }
 
       received_frame_ = true;
+    } else {
+      RTC_LOG(LS_INFO) << "Received black frame!";
     }
   }
  private:

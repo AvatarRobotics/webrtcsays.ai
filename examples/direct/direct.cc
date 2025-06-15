@@ -304,6 +304,14 @@ bool DirectApplication::CreatePeerConnection() {
       peer_connection_ = nullptr;
     }
 
+  // Log timing information to diagnose initialization order
+  RTC_LOG(LS_INFO) << "Checking if video source is set before creating peer connection. Video source pointer: " << video_source_.get();
+  if (!video_source_ && opts_.video && is_caller()) {
+    RTC_LOG(LS_WARNING) << "Video source not set yet for caller with video enabled. This may cause black frames. Ensure SetVideoSource is called before CreatePeerConnection.";
+  } else if (video_source_) {
+    RTC_LOG(LS_INFO) << "Video source state before peer connection creation: " << (video_source_->state() == webrtc::MediaSourceInterface::kLive ? "Live" : "Not Live");
+  }
+
   // Create/get certificate if needed
   if (opts_.encryption && !certificate_) {
     certificate_ = DirectLoadCertificateFromEnv(opts_);
@@ -566,21 +574,19 @@ bool DirectApplication::CreatePeerConnection() {
   peer_connection_ = pcf_result.MoveValue();
   RTC_LOG(LS_INFO) << "PeerConnection created successfully.";
 
+  // Explicitly attempt to add video track after peer connection creation if source is available
+  if (video_source_) {
+    RTC_LOG(LS_INFO) << "Peer connection created, attempting to add video track immediately.";
+    AddVideoTrackIfSourceAvailable();
+  } else {
+    RTC_LOG(LS_WARNING) << "No video source available to add as a track after peer connection creation.";
+  }
+
   // Add video track if we have a video source
   if (video_source_) {
-    RTC_LOG(LS_INFO) << "Adding video track from stored source. Source pointer: " << video_source_.get();
-    rtc::scoped_refptr<webrtc::VideoTrackInterface> video_track(
-        peer_connection_factory_->CreateVideoTrack(video_source_, "video_track"));
-    video_track_ = video_track;
-    auto result = peer_connection_->AddTrack(video_track, {"stream1"});
-    if (!result.ok()) {
-      RTC_LOG(LS_ERROR) << "Failed to add video track to PeerConnection: " << result.error().message();
-    } else {
-      RTC_LOG(LS_INFO) << "Video track added successfully to PeerConnection.";
-      RTC_LOG(LS_INFO) << "Monitoring video source for frame delivery.";
-    }
+    RTC_LOG(LS_INFO) << "Video source state: " << (video_source_->state() == webrtc::MediaSourceInterface::kLive ? "Live" : "Not Live");
   } else {
-    RTC_LOG(LS_WARNING) << "No video source available to add as a track. Video transmission will not occur.";
+    RTC_LOG(LS_WARNING) << "No video source available.";
   }
 
   return true;
@@ -685,6 +691,8 @@ void DirectApplication::OnAddTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterfa
             RTC_LOG(LS_INFO) << "Attaching video sink to track: " << receiver->track()->id();
             video_track->AddOrUpdateSink(video_sink_.get(), rtc::VideoSinkWants());
             RTC_LOG(LS_INFO) << "Checking if video source is providing frames...";
+            RTC_LOG(LS_INFO) << "Receiver: Video track state: " << video_track->state();
+            RTC_LOG(LS_INFO) << "Receiver: Video track enabled: " << (video_track->enabled() ? "true" : "false");
         } else {
             RTC_LOG(LS_ERROR) << "Video sink is still nullptr, cannot attach to track: " << receiver->track()->id();
         }
@@ -713,14 +721,23 @@ bool DirectApplication::SetVideoSource(
   if (rtc::Thread::Current() != signaling_thread()) {
     signaling_thread()->BlockingCall([this, video_source]() {
       video_source_ = video_source;
+      AddVideoTrackIfSourceAvailable();
     });
   } else {
       video_source_ = video_source;
+      AddVideoTrackIfSourceAvailable();
   }
 
   RTC_LOG(LS_INFO) << "Video source set for " << (is_caller() ? "caller" : "callee") << ", source pointer: " << video_source_.get();
   if (!video_source_) {
     RTC_LOG(LS_WARNING) << "Warning: Video source is nullptr, no video will be sent.";
+  } else {
+    RTC_LOG(LS_INFO) << "Video source is set, state: " << (video_source_->state() == webrtc::MediaSourceInterface::kLive ? "Live" : "Not Live");
+    if (video_source_->state() != webrtc::MediaSourceInterface::kLive) {
+      RTC_LOG(LS_WARNING) << "Video source is not in live state on sender side. Black frames may be sent.";
+    } else {
+      RTC_LOG(LS_INFO) << "Video source is live, frames should be delivered from sender.";
+    }
   }
   return true;
 }
@@ -738,4 +755,35 @@ bool DirectApplication::SetVideoSink(
 
   RTC_LOG(LS_INFO) << "Video sink set for " << (is_caller() ? "caller" : "callee");
   return true;
+}
+
+// Method to add video track if source is available and peer connection exists
+void DirectApplication::AddVideoTrackIfSourceAvailable() {
+  if (video_source_ && peer_connection_) {
+    RTC_LOG(LS_INFO) << "Adding video track to existing peer connection for " << (is_caller() ? "caller" : "callee");
+    RTC_LOG(LS_INFO) << "Video source state before adding track: " << (video_source_->state() == webrtc::MediaSourceInterface::kLive ? "Live" : "Not Live");
+    if (video_source_->state() != webrtc::MediaSourceInterface::kLive) {
+      RTC_LOG(LS_WARNING) << "Video source is not in live state. Frames may not be delivered.";
+    }
+    rtc::scoped_refptr<webrtc::VideoTrackInterface> video_track(
+        peer_connection_factory_->CreateVideoTrack(video_source_, "video_track"));
+    video_track_ = video_track;
+    video_track_->set_enabled(true);
+    auto result = peer_connection_->AddTrack(video_track, {"stream1"});
+    if (!result.ok()) {
+      RTC_LOG(LS_ERROR) << "Failed to add video track to PeerConnection: " << result.error().message();
+    } else {
+      RTC_LOG(LS_INFO) << "Video track added successfully to PeerConnection";
+      RTC_LOG(LS_INFO) << "Sender: Video track enabled: " << (video_track_->enabled() ? "true" : "false");
+      if (video_source_->state() == webrtc::MediaSourceInterface::kLive && video_track_->enabled()) {
+        RTC_LOG(LS_INFO) << "Sender: Video source is live and track is enabled. Frames should be sent to remote peer.";
+      } else {
+        RTC_LOG(LS_WARNING) << "Sender: Video source or track state issue. Black frames may be sent to remote peer.";
+      }
+    }
+  } else if (!peer_connection_) {
+    RTC_LOG(LS_INFO) << "Peer connection not yet created, video track will be added later.";
+  } else if (!video_source_) {
+    RTC_LOG(LS_WARNING) << "No video source available to add as a track. Video transmission will not occur.";
+  }
 }
