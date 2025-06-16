@@ -43,6 +43,20 @@ void DirectApplication::SetVideoRenderer(RTCMTLVideoView* renderer) {
   RTC_LOG(LS_INFO) << "SetVideoRenderer:: SetVideoSink by ObjCVideoRenderer";
   SetVideoSink(std::move(native_sink));
 }
+
+RTCVideoTrack* DirectApplication::GetLocalVideoTrack() {
+  // Note: This method should not be used directly as C++ and Obj-C WebRTC APIs are separate
+  // The video tracks should be managed at the Objective-C wrapper level
+  RTC_LOG(LS_WARNING) << "GetLocalVideoTrack called - C++ to Obj-C video track conversion not supported";
+  return nil;
+}
+
+RTCVideoTrack* DirectApplication::GetRemoteVideoTrack() {
+  // Note: This method should not be used directly as C++ and Obj-C WebRTC APIs are separate
+  // The video tracks should be managed at the Objective-C wrapper level
+  RTC_LOG(LS_WARNING) << "GetRemoteVideoTrack called - C++ to Obj-C video track conversion not supported";
+  return nil;
+}
 #endif  // #if TARGET_OS_IOS && defined(__OBJC__)
 
 #if TARGET_OS_IOS || TARGET_OS_OSX

@@ -32,6 +32,8 @@
 #include <sstream>
 #include <memory>
 #include <cstdlib>
+#include <string>
+#include <vector>
 
 #include "direct.h"
 #include "option.h"
@@ -83,11 +85,18 @@ void DirectApplication::Cleanup() {
   // Explicitly close and release PeerConnection via Shutdown before stopping threads
   ShutdownInternal();
 
-  // Remove sink before closing the connection
-  if (video_track_ && video_sink_) {
-      RTC_LOG(LS_INFO) << "Removing video sink.";
-      video_track_->RemoveSink(video_sink_.get());
-      video_sink_ = nullptr;
+  // Remove sink before closing the connection - handle both local and remote tracks
+  if (video_sink_) {
+      if (video_track_) {
+          RTC_LOG(LS_INFO) << "Removing video sink from local track.";
+          video_track_->RemoveSink(video_sink_.get());
+      }
+      if (remote_video_track_) {
+          RTC_LOG(LS_INFO) << "Removing video sink from remote track.";
+          remote_video_track_->RemoveSink(video_sink_.get());
+      }
+      // Don't null the video_sink_ here to allow reuse in next connection
+      RTC_LOG(LS_INFO) << "Video sink preserved for potential reuse.";
   }
 
   // Explicitly release PeerConnectionFactory and ADM references on the worker thread before stopping threads
@@ -197,6 +206,15 @@ void DirectApplication::Disconnect() {
     RTC_LOG(LS_INFO) << "Closing peer connection, video transmission will stop if active.";
     peer_connection_->Close();
     peer_connection_ = nullptr;
+  }
+  
+  // Preserve video pipeline components for reconnection but clear references
+  if (remote_video_track_) {
+    RTC_LOG(LS_INFO) << "Clearing remote video track reference for reconnection.";
+    if (video_sink_) {
+      remote_video_track_->RemoveSink(video_sink_.get());
+    }
+    remote_video_track_ = nullptr;
   }
   // peer_connection_factory_ = nullptr; // Keep factory alive for reconnection
 
@@ -315,19 +333,23 @@ bool DirectApplication::Initialize() {
 
 
 bool DirectApplication::CreatePeerConnection() {
-
   RTC_LOG(LS_INFO) << "Creating peer connection";
 
   if (peer_connection_) {
-      peer_connection_->Close();
-      peer_connection_ = nullptr;
-    }
+    peer_connection_->Close();
+    peer_connection_ = nullptr;
+  }
 
   // Log timing information to diagnose initialization order
   if (!video_source_ && opts_.video && is_caller()) {
     RTC_LOG(LS_WARNING) << "Video source not set yet for caller with video enabled. This may cause black frames. Ensure SetVideoSource is called before CreatePeerConnection.";
   } else if (video_source_) {
     RTC_LOG(LS_INFO) << "Video source state before peer connection creation: " << (video_source_->state() == webrtc::MediaSourceInterface::kLive ? "Live" : "Not Live");
+    if (video_source_->state() == webrtc::MediaSourceInterface::kLive) {
+      RTC_LOG(LS_INFO) << "Video source is live before peer connection creation, frames should be available.";
+    } else {
+      RTC_LOG(LS_WARNING) << "Video source is NOT live before peer connection creation, video may freeze.";
+    }
   }
 
   // Create/get certificate if needed
@@ -596,16 +618,19 @@ bool DirectApplication::CreatePeerConnection() {
   if (video_source_) {
     RTC_LOG(LS_INFO) << "Peer connection created, attempting to add video track immediately.";
     AddVideoTrackIfSourceAvailable();
+    RTC_LOG(LS_INFO) << "Post-creation video source state: " << (video_source_->state() == webrtc::MediaSourceInterface::kLive ? "Live" : "Not Live");
+    if (video_source_->state() == webrtc::MediaSourceInterface::kLive) {
+      RTC_LOG(LS_INFO) << "Video source is live post-peer connection creation, frames should be available for sending.";
+    } else {
+      RTC_LOG(LS_WARNING) << "Video source is NOT live post-peer connection creation, video may freeze or show black frames.";
+    }
   } else {
-    RTC_LOG(LS_WARNING) << "No video source available to add as a track after peer connection creation.";
+    RTC_LOG(LS_WARNING) << "No video source available to add as a track after peer connection creation. Video will not be sent.";
   }
 
-  // Add video track if we have a video source
-  if (video_source_) {
-    RTC_LOG(LS_INFO) << "Video source state: " << (video_source_->state() == webrtc::MediaSourceInterface::kLive ? "Live" : "Not Live");
-  } else {
-    RTC_LOG(LS_WARNING) << "No video source available.";
-  }
+  // Additional check to ensure video send is active
+  EnsureVideoSendActive();
+  RTC_LOG(LS_INFO) << "Video send check performed after peer connection creation.";
 
   return true;
 }
@@ -700,16 +725,20 @@ void DirectApplication::OnAddTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterfa
         RTC_LOG(LS_INFO) << "Video track added for " << (is_caller() ? "caller" : "callee");
         auto* video_track = static_cast<webrtc::VideoTrackInterface*>(receiver->track().get());
         
-        // Ensure we don't add multiple sinks
-        if(!video_sink_ && opts_.video) {
-          RTC_LOG(LS_INFO) << "Initializing video sink...";
+        // Always create video sink for remote video tracks to prevent freezing
+        if(!video_sink_) {
+          RTC_LOG(LS_INFO) << "Initializing video sink for remote video track...";
           video_sink_ = std::make_unique<webrtc::LlamaVideoRenderer>();
         }
         
         if (video_sink_) {
             RTC_LOG(LS_INFO) << "Attaching video sink to track: " << receiver->track()->id();
             video_track->AddOrUpdateSink(video_sink_.get(), rtc::VideoSinkWants());
-            RTC_LOG(LS_INFO) << "Checking if video source is providing frames...";
+            
+            // Store reference to remote video track to prevent disconnection
+            remote_video_track_ = video_track;
+            
+            RTC_LOG(LS_INFO) << "Video sink attached successfully";
             RTC_LOG(LS_INFO) << "Receiver: Video track state: " << video_track->state();
             RTC_LOG(LS_INFO) << "Receiver: Video track enabled: " << (video_track->enabled() ? "true" : "false");
         } else {
@@ -724,12 +753,13 @@ void DirectApplication::OnAddTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterfa
 void DirectApplication::OnRemoveTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver) {
     RTC_LOG(LS_INFO) << "Track removed: " << receiver->track()->id();
     if (receiver->track()->kind() == webrtc::MediaStreamTrackInterface::kVideoKind) {
-        auto* video_track = static_cast<webrtc::VideoTrackInterface*>(receiver->track().get());
-        if (video_sink_) {
-            RTC_LOG(LS_INFO) << "Removing video track for " << (is_caller() ? "caller" : "callee");
-            video_track->RemoveSink(video_sink_.get());
-            video_sink_ = nullptr;
+        if (video_sink_ && remote_video_track_) {
+            RTC_LOG(LS_INFO) << "Removing video sink from remote track for " << (is_caller() ? "caller" : "callee");
+            remote_video_track_->RemoveSink(video_sink_.get());
         }
+        // Clear remote video track reference
+        remote_video_track_ = nullptr;
+        RTC_LOG(LS_INFO) << "Remote video track reference cleared";
     }
 }
 
@@ -739,18 +769,22 @@ bool DirectApplication::SetVideoSource(
   // Ensure assignment happens on the signaling thread for safety.
   if (rtc::Thread::Current() != signaling_thread()) {
     signaling_thread()->BlockingCall([this, video_source]() {
-      // Safeguard: Prevent overwriting a live source with null or a non-live source
-      if (video_source_ && video_source_->state() == webrtc::MediaSourceInterface::kLive && !video_source) {
-        RTC_LOG(LS_WARNING) << "Attempt to overwrite a live video source with null. Ignoring to prevent video freezing.";
+      // Safeguard: Prevent overwriting a live source with null during active connection
+      if (video_source_ && video_source_->state() == webrtc::MediaSourceInterface::kLive && 
+          !video_source && peer_connection_ && 
+          peer_connection_->ice_connection_state() == webrtc::PeerConnectionInterface::kIceConnectionConnected) {
+        RTC_LOG(LS_WARNING) << "Attempt to overwrite a live video source with null during active connection. Ignoring to prevent video freezing.";
         return;
       }
       video_source_ = video_source;
       AddVideoTrackIfSourceAvailable();
     });
   } else {
-      // Safeguard: Prevent overwriting a live source with null or a non-live source
-      if (video_source_ && video_source_->state() == webrtc::MediaSourceInterface::kLive && !video_source) {
-        RTC_LOG(LS_WARNING) << "Attempt to overwrite a live video source with null. Ignoring to prevent video freezing.";
+      // Safeguard: Prevent overwriting a live source with null during active connection
+      if (video_source_ && video_source_->state() == webrtc::MediaSourceInterface::kLive && 
+          !video_source && peer_connection_ && 
+          peer_connection_->ice_connection_state() == webrtc::PeerConnectionInterface::kIceConnectionConnected) {
+        RTC_LOG(LS_WARNING) << "Attempt to overwrite a live video source with null during active connection. Ignoring to prevent video freezing.";
         return true;
       }
       video_source_ = video_source;
@@ -823,15 +857,28 @@ void DirectApplication::AddVideoTrackIfSourceAvailable() {
 void DirectApplication::EnsureVideoSendActive() {
   if (video_track_ && video_source_ && peer_connection_) {
     RTC_LOG(LS_INFO) << "Ensuring video send is active for SSRC associated with track.";
-    // Directly log a warning if video source might be unset elsewhere
+    
+    // Check if video source is live and track is enabled
     if (video_source_->state() == webrtc::MediaSourceInterface::kLive) {
       RTC_LOG(LS_INFO) << "Video source is live, ensuring it remains active for sending.";
-      // Note: WebRTC's SetVideoSend is internal, so we can't directly intercept it here.
-      // Instead, we log to detect potential issues in subsequent logs.
+      
+      // Ensure video track is enabled
+      if (!video_track_->enabled()) {
+        RTC_LOG(LS_WARNING) << "Video track was disabled, re-enabling to prevent freezing.";
+        video_track_->set_enabled(true);
+      }
+      
+      // Log current connection state for debugging
+      if (peer_connection_->ice_connection_state() == webrtc::PeerConnectionInterface::kIceConnectionConnected) {
+        RTC_LOG(LS_INFO) << "ICE connected - video should be flowing normally.";
+      }
+      
     } else {
       RTC_LOG(LS_WARNING) << "Video source is not live, cannot ensure active video send.";
     }
   } else {
-    RTC_LOG(LS_WARNING) << "Cannot ensure video send active: missing track, source, or peer connection.";
+    RTC_LOG(LS_WARNING) << "Cannot ensure video send active: missing track (" << (video_track_ ? "present" : "missing") 
+                        << "), source (" << (video_source_ ? "present" : "missing") 
+                        << "), or peer connection (" << (peer_connection_ ? "present" : "missing") << ").";
   }
 }

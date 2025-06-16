@@ -106,6 +106,7 @@
 #if TARGET_OS_IOS && defined(__OBJC__)
 #import "sdk/objc/base/RTCVideoCapturer.h"
 #import "sdk/objc/components/renderer/metal/RTCMTLVideoView.h"
+#import "sdk/objc/api/peerconnection/RTCVideoTrack.h"
 #endif
 
 // Only include the C++ API for C++ consumers
@@ -214,6 +215,12 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
   void AddVideoTrackIfSourceAvailable();
   void EnsureVideoSendActive();
 
+#if defined(WEBRTC_IOS) && defined(__OBJC__)
+  // Getter methods for video tracks (iOS only)
+  RTC_OBJC_TYPE(RTCVideoTrack)* GetLocalVideoTrack();
+  RTC_OBJC_TYPE(RTCVideoTrack)* GetRemoteVideoTrack();
+#endif
+
  protected:
   Options opts_;  // Store command line options
   bool is_caller() const { return opts_.mode == "caller"; }
@@ -252,6 +259,7 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
 
   // Video track and sink
   rtc::scoped_refptr<webrtc::VideoTrackInterface> video_track_ = nullptr;
+  rtc::scoped_refptr<webrtc::VideoTrackInterface> remote_video_track_ = nullptr;
   // Video sink provided by host (e.g. Obj-C app)
   std::unique_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> video_sink_;
   rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> video_source_ = nullptr;
