@@ -160,8 +160,11 @@ IPAddressResult GetLocalIPAddress() {
 
 bool DIRECT_API AdvertiseBonjourService(const std::string& name, int port) {
     if (g_advert_ref) {
+        RTC_LOG(LS_INFO) << "Stopping existing Bonjour advertisement to update with current IP";
         DNSServiceRefDeallocate(g_advert_ref);
         g_advert_ref = nullptr;
+        // Longer delay to ensure the service is properly deregistered and cache cleared
+        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
     }
 
     // Get the local IP and Wi-Fi flag
@@ -204,21 +207,32 @@ bool DIRECT_API AdvertiseBonjourService(const std::string& name, int port) {
     std::string sys_hostname_str(sys_hostname);
     RTC_LOG(LS_INFO) << "System hostname: " << (sys_hostname_str.empty() ? "empty" : sys_hostname_str);
 
-    // Create TXT record with IP
-    std::string txt_record = "ip=" + ipResult.ip;
+    // Create TXT record with IP and timestamp as separate key-value pairs
+    auto now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    
     unsigned char txt_buffer[256] = {0};
     uint16_t txt_len = 0;
-    if (!txt_record.empty()) {
-        size_t len = txt_record.length();
-        if (len < 255) {
-            txt_buffer[0] = static_cast<unsigned char>(len);
-            memcpy(txt_buffer + 1, txt_record.c_str(), len);
-            txt_len = len + 1;
-        } else {
-            RTC_LOG(LS_ERROR) << "TXT record too long: " << txt_record;
-            txt_len = 0;
-        }
+    
+    // Add ip=x.x.x.x
+    std::string ip_record = "ip=" + ipResult.ip;
+    if (ip_record.length() < 255) {
+        txt_buffer[txt_len] = static_cast<unsigned char>(ip_record.length());
+        txt_len++;
+        memcpy(txt_buffer + txt_len, ip_record.c_str(), ip_record.length());
+        txt_len += ip_record.length();
     }
+    
+    // Add ts=timestamp
+    std::string ts_record = "ts=" + std::to_string(now);
+    if (txt_len + ts_record.length() + 1 < 256) {
+        txt_buffer[txt_len] = static_cast<unsigned char>(ts_record.length());
+        txt_len++;
+        memcpy(txt_buffer + txt_len, ts_record.c_str(), ts_record.length());
+        txt_len += ts_record.length();
+    }
+    
+    std::string txt_summary = ip_record + "," + ts_record;
 
     // Log parameters for debugging
     RTC_LOG(LS_INFO) << "Registering Bonjour service:";
@@ -226,13 +240,14 @@ bool DIRECT_API AdvertiseBonjourService(const std::string& name, int port) {
     RTC_LOG(LS_INFO) << "  Type: _webrtcsays._tcp";
     RTC_LOG(LS_INFO) << "  Port: " << port;
     RTC_LOG(LS_INFO) << "  Host: (system default)";
-    RTC_LOG(LS_INFO) << "  TXT: " << (txt_len ? txt_record : "none");
+    RTC_LOG(LS_INFO) << "  TXT: " << (txt_len ? txt_summary : "none");
 
     // Advertise as _webrtcsays._tcp.local.
+    // Use kDNSServiceFlagsUnique to force replacement of existing records
     // Use nullptr for hostname to let mDNS use the system's resolvable hostname
     DNSServiceErrorType err = DNSServiceRegister(
         &g_advert_ref,
-        0, // flags
+        kDNSServiceFlagsUnique, // flags - force unique registration (replaces existing)
         0, // interface index (0 = all)
         service_name.c_str(),
         "_webrtcsays._tcp",
@@ -262,12 +277,13 @@ bool DIRECT_API AdvertiseBonjourService(const std::string& name, int port) {
                 break;
         }
         RTC_LOG(LS_ERROR) << "Parameters: Name=" << service_name << ", Type=_webrtcsays._tcp, Port=" << port
-                  << ", Host=(system default), TXT=" << (txt_len ? txt_record : "none");
+                  << ", Host=(system default), TXT=" << (txt_len ? txt_summary : "none");
         return false;
     }
 
     RTC_LOG(LS_INFO) << "Bonjour advertised as '" << service_name << "' on port " << port;
     RTC_LOG(LS_INFO) << " Advertising on IP: " << ipResult.ip << " (" << (ipResult.isWiFi ? "Wi-Fi" : "Non-Wi-Fi") << ")";
+    RTC_LOG(LS_INFO) << " TXT record: " << txt_summary;
 
     // Run the service in a background thread
     std::thread([]{
@@ -317,8 +333,11 @@ static void DNSSD_API resolve_callback(
                 if (ptr + len <= end) {
                     std::string entry(reinterpret_cast<const char*>(ptr), len);
                     if (entry.substr(0, 3) == "ip=") {
-                        ip_from_txt = entry.substr(3);
-                        RTC_LOG(LS_INFO) << "[Resolve] Found IP in TXT: " << ip_from_txt;
+                        std::string full_value = entry.substr(3);
+                        // Extract IP part before any comma (in case of ip=x.x.x.x,ts=timestamp)
+                        size_t comma_pos = full_value.find(',');
+                        ip_from_txt = (comma_pos != std::string::npos) ? full_value.substr(0, comma_pos) : full_value;
+                        RTC_LOG(LS_INFO) << "[Resolve] Found IP in TXT: " << ip_from_txt << " (full entry: " << entry << ")";
                         break;
                     }
                 }
@@ -393,7 +412,7 @@ static void DNSSD_API browse_callback(
         DNSServiceRef resolveRef = nullptr;
         DNSServiceErrorType err = DNSServiceResolve(
             &resolveRef,
-            0,
+            kDNSServiceFlagsForceMulticast, // Force multicast to bypass cache
             interfaceIndex,
             serviceName,
             regtype,
@@ -430,7 +449,7 @@ static void DNSSD_API browse_callback(
 }
 
 bool DIRECT_API DiscoverBonjourService(const std::string& name, std::string& out_ip, int& out_port, int timeout_seconds) {
-    RTC_LOG(LS_INFO) << "[Discovery] Starting Bonjour discovery for: '" << name << "'";
+    RTC_LOG(LS_INFO) << "[Discovery] Starting Bonjour discovery for: '" << name << "' (timeout: " << timeout_seconds << "s)";
     
     BonjourDiscoveryContext ctx;
     ctx.target_name = name;
@@ -438,7 +457,7 @@ bool DIRECT_API DiscoverBonjourService(const std::string& name, std::string& out
     
     DNSServiceErrorType err = DNSServiceBrowse(
         &browseRef,
-        0,
+        kDNSServiceFlagsForceMulticast, // Force multicast to bypass cache
         0,
         "_webrtcsays._tcp",
         nullptr,
