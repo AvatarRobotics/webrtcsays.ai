@@ -15,6 +15,13 @@
 #include <unistd.h> // For usleep
 #include <vector>
 #include <string>
+#include <algorithm>
+#include <regex>
+#include <atomic>
+#include <map>
+#include <sstream>
+#include <memory>
+#include <cstdlib>
 #include "rtc_base/time_utils.h"
 #include "api/video_codecs/video_decoder_factory_template.h"
 #include "api/video_codecs/video_decoder_factory_template_dav1d_adapter.h"
@@ -26,14 +33,6 @@
 #include "api/video_codecs/video_encoder_factory_template_libvpx_vp8_adapter.h"
 #include "api/video_codecs/video_encoder_factory_template_libvpx_vp9_adapter.h"
 #include "api/video_codecs/video_encoder_factory_template_open_h264_adapter.h"
-#include <regex>
-#include <atomic>
-#include <map>
-#include <sstream>
-#include <memory>
-#include <cstdlib>
-#include <string>
-#include <vector>
 
 #include "direct.h"
 #include "option.h"
@@ -497,11 +496,14 @@ bool DirectApplication::CreatePeerConnection() {
   config.bundle_policy = webrtc::PeerConnectionInterface::kBundlePolicyMaxBundle;
   config.rtcp_mux_policy = webrtc::PeerConnectionInterface::kRtcpMuxPolicyRequire;
   
-  // Simple, reliable intervals
-  config.ice_connection_receiving_timeout = 30000;  // 30 seconds instead of default 15
-  config.ice_backup_candidate_pair_ping_interval = 2500; // Keep backup pairs alive
+  // Only increase the connection timeout modestly to avoid validation issues
+  config.ice_connection_receiving_timeout = 45000;  // 45 seconds (was 30)
 
   cricket::ServerAddresses stun_servers;
+  stun_servers.insert(rtc::SocketAddress("stun.l.google.com", 19302));
+  stun_servers.insert(rtc::SocketAddress("stun1.l.google.com", 19302));
+  stun_servers.insert(rtc::SocketAddress("stun2.l.google.com", 19302));
+  
   std::vector<cricket::RelayServerConfig> turn_servers;
 
   if(opts_.turns.size()) {
@@ -515,9 +517,7 @@ bool DirectApplication::CreatePeerConnection() {
     }
   }
 
-  webrtc::PeerConnectionInterface::IceServer stun_server;
-  stun_server.uri = "stun:stun.l.google.com:19302";
-  config.servers.push_back(stun_server);
+  // Use default STUN server configuration to avoid complexity
 
   for (const auto& server : config.servers) {
       if (server.uri.find("stun:") == 0) {

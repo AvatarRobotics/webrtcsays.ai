@@ -26,13 +26,14 @@
 
 #include "api/video/i420_buffer.h"
 #include "modules/third_party/whillats/src/whillats.h"
+#include "modules/audio_device/speech/speech_audio_device_factory.h"
 #include "rtc_base/time_utils.h"
 
 namespace webrtc {
 class StaticPeriodicVideoSource final
     : public rtc::VideoSourceInterface<VideoFrame> {
  public:
-  static constexpr int kDefaultFrameIntervalMs = 33;
+  static constexpr int kDefaultFrameIntervalMs = 1000;
   static constexpr int kDefaultWidth = 640;
   static constexpr int kDefaultHeight = 480;
 
@@ -55,14 +56,13 @@ class StaticPeriodicVideoSource final
             "FakePeriodicVideoTrackSource")),
         rotation_(config.rotation),
         current_width_(config.width),
-        current_height_(config.height),
-        interval_us_(config.frame_interval_ms * rtc::kNumMicrosecsPerMillisec) {
+        current_height_(config.height) {
     frame_source_.SetRotation(config.rotation);
 
     TimeDelta frame_interval = TimeDelta::Millis(config.frame_interval_ms);
     repeating_task_handle_ =
         RepeatingTaskHandle::Start(task_queue_->Get(), [this, frame_interval] {
-          // If a YUV buffer is loaded, send it instead of the fake frame
+          // Only send frames if a YUV buffer is loaded - don't send black/fake frames
           {
             MutexLock lock(&mutex_);
             if (use_yuv_ && yuv_buffer_) {
@@ -73,20 +73,8 @@ class StaticPeriodicVideoSource final
               return frame_interval;
             }
           }
-          // Fallback to fake frame with dynamic size
-          rtc::VideoSinkWants wants = broadcaster_.wants();
-          int width;
-          int height;
-          {
-            MutexLock lock(&mutex_);
-            width = current_width_;
-            height = current_height_;
-          }
-          // Choose rotation based on sink preference
-          VideoRotation rot = wants.rotation_applied ? rotation_ : kVideoRotation_0;
-          // Generate frame with current dimensions
-          VideoFrame fake = frame_source_.GetFrame(width, height, rot, interval_us_);
-          broadcaster_.OnFrame(fake);
+          // No YUV buffer loaded - skip sending frame to avoid black frames
+          // This ensures only real video content is transmitted
           return frame_interval;
         });
   }
@@ -167,10 +155,9 @@ class StaticPeriodicVideoSource final
   rtc::scoped_refptr<I420BufferInterface> yuv_buffer_ RTC_GUARDED_BY(&mutex_);
   bool use_yuv_ RTC_GUARDED_BY(&mutex_) = false;
   VideoRotation rotation_;
-  // Dynamic dimensions and interval for frames
+  // Dynamic dimensions for frames
   int current_width_ RTC_GUARDED_BY(&mutex_);
   int current_height_ RTC_GUARDED_BY(&mutex_);
-  int interval_us_;
 };
 
 class StaticPeriodicVideoTrackSource : public VideoTrackSource {
@@ -237,7 +224,7 @@ class LlamaVideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
     if (!isVideoFrameBlack(frame)) {
       rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer(
           frame.video_frame_buffer());
-      RTC_LOG(LS_INFO) << "Received video frame (" << buffer->type() << ") "
+      RTC_LOG(LS_VERBOSE) << "Received video frame (" << buffer->type() << ") "
                         << frame.width() << "x" << frame.height()
                         << " timestamp=" << frame.timestamp_us();
 
@@ -258,21 +245,11 @@ class LlamaVideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
         std::memcpy(yuv_data.u.get(), i420_buffer->DataU(), uv_size);
         yuv_data.v = std::make_unique<uint8_t[]>(uv_size);
         std::memcpy(yuv_data.v.get(), i420_buffer->DataV(), uv_size);
-// #if TARGET_OS_OSX
-//         save_yuv_as_bmp(yuv_data, "clip_in_askWithYUVRaw.bmp");
-// #endif
 
-        if(webrtc::SpeechAudioDeviceFactory::llama()) {
-          webrtc::SpeechAudioDeviceFactory::llama()->askWithYUVRaw(
-            "Please describe the image",
-            yuv_data.y.get(),
-            yuv_data.u.get(),
-            yuv_data.v.get(),
-            yuv_data.width,
-            yuv_data.height,
-            yuv_data.y_size,
-            yuv_data.uv_size);    
-          }
+        if (SpeechAudioDeviceFactory::llama()) {
+          // Send video frame to be queued for later use with prompts
+          SpeechAudioDeviceFactory::llama()->receiveVideoFrame(yuv_data);
+        }
       }
 
       received_frame_ = true;

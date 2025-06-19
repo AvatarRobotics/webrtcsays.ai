@@ -16,10 +16,12 @@
 #include <sys/socket.h>
 #include <unistd.h>  // For close
 
+#include <chrono>
 #include <cstdlib>
 #include <cstring>  // For memset
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "direct.h"
@@ -47,67 +49,123 @@ DirectCallee::~DirectCallee() {
 bool DirectCallee::StartListening() {
   // Core listening setup logic as a callable
   auto listen_fn = [this]() -> bool {
-    // Create raw socket
-    int raw_socket = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (raw_socket < 0) {
-      RTC_LOG(LS_ERROR) << "Failed to create socket, errno: "
-                        << strerror(errno);
-      return false;
-    }
+    const int kMaxRetries = 10;
+    const int kMaxRetryTimeMs = 30000; // 30 seconds total
+    const int kInitialDelayMs = 100;   // Start with 100ms delay
+    
+    auto start_time = std::chrono::steady_clock::now();
+    
+    for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
+      // Check if we've exceeded the total timeout
+      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - start_time).count();
+      if (elapsed >= kMaxRetryTimeMs) {
+        RTC_LOG(LS_ERROR) << "Binding timeout exceeded (" << kMaxRetryTimeMs << "ms). Giving up.";
+        break;
+      }
+      
+      // Create raw socket
+      int raw_socket = ::socket(AF_INET, SOCK_STREAM, 0);
+      if (raw_socket < 0) {
+        RTC_LOG(LS_ERROR) << "Failed to create socket, errno: "
+                          << strerror(errno);
+        return false;
+      }
 
-    // Setup server address
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(local_port_);
-    addr.sin_addr.s_addr = INADDR_ANY;
+      // Set SO_REUSEADDR to allow address reuse
+      int reuse = 1;
+      if (::setsockopt(raw_socket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
+        RTC_LOG(LS_WARNING) << "Failed to set SO_REUSEADDR, errno: " << strerror(errno);
+        // Continue anyway, this is not fatal
+      }
 
-    // Bind
-    if (::bind(raw_socket, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-      RTC_LOG(LS_ERROR) << "Failed to bind, errno: " << strerror(errno);
-      ::close(raw_socket);
-      return false;
-    }
+      // Setup server address
+      struct sockaddr_in addr;
+      memset(&addr, 0, sizeof(addr));
+      addr.sin_family = AF_INET;
+      addr.sin_port = htons(local_port_);
+      addr.sin_addr.s_addr = INADDR_ANY;
 
-    // Retrieve the actual port assigned by the OS if port was 0
-    socklen_t addrlen = sizeof(addr);
-    if (getsockname(raw_socket, (struct sockaddr*)&addr, &addrlen) == 0) {
-        local_port_ = ntohs(addr.sin_port);
-    }
-
-    // Listen
-    if (::listen(raw_socket, 5) < 0) {
-      RTC_LOG(LS_ERROR) << "Failed to listen, errno: " << strerror(errno);
-      ::close(raw_socket);
-      return false;
-    }
-
-    // Wrap the listening socket
-    auto wrapped_socket = pss()->WrapSocket(raw_socket);
-    if (!wrapped_socket) {
-      RTC_LOG(LS_ERROR) << "Failed to wrap socket";
-      ::close(raw_socket);
-      return false;
-    }
-
-    listen_socket_ = std::make_unique<rtc::AsyncTcpListenSocket>(
-        std::unique_ptr<rtc::Socket>(wrapped_socket));
-    listen_socket_->SignalNewConnection.connect(this,
-                                                &DirectCallee::OnNewConnection);
-
-    RTC_LOG(LS_INFO) << "Server listening on port " << local_port_;
-
-    #if TARGET_OS_IOS || TARGET_OS_OSX
-    // Bonjour advertisement
-    if (!opts_.bonjour_name.empty()) {
-        if (AdvertiseBonjourService(opts_.bonjour_name, local_port_)) {
-            RTC_LOG(LS_INFO) << "Bonjour advertised as '" << opts_.bonjour_name << "' on port " << local_port_;
-        } else {
-            RTC_LOG(LS_WARNING) << "Bonjour advertisement failed for '" << opts_.bonjour_name << "'";
+      // Attempt to bind
+      if (::bind(raw_socket, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        int bind_errno = errno;
+        RTC_LOG(LS_WARNING) << "Bind attempt " << (attempt + 1) << "/" << kMaxRetries 
+                           << " failed, errno: " << strerror(bind_errno) 
+                           << " (port " << local_port_ << ")";
+        ::close(raw_socket);
+        
+        // If not "Address already in use", don't retry
+        if (bind_errno != EADDRINUSE) {
+          RTC_LOG(LS_ERROR) << "Non-recoverable bind error: " << strerror(bind_errno);
+          return false;
         }
-    }
-    #endif // #if TARGET_OS_IOS || TARGET_OS_OSX
-    return true;
+        
+        // Calculate delay with exponential backoff (100ms, 200ms, 400ms, 800ms, 1600ms, then cap at 2000ms)
+        int delay_ms = kInitialDelayMs * (1 << std::min(attempt, 4));
+        delay_ms = std::min(delay_ms, 2000); // Cap at 2 seconds
+        
+        // Make sure we don't exceed total timeout
+        if (elapsed + delay_ms >= kMaxRetryTimeMs) {
+          delay_ms = kMaxRetryTimeMs - elapsed;
+          if (delay_ms <= 0) {
+            RTC_LOG(LS_ERROR) << "No time left for retry delay. Giving up.";
+            break;
+          }
+        }
+        
+        RTC_LOG(LS_INFO) << "Retrying bind in " << delay_ms << "ms...";
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+        continue;
+      }
+      
+      // Bind succeeded, continue with socket setup
+      RTC_LOG(LS_INFO) << "Bind succeeded on attempt " << (attempt + 1) << " (port " << local_port_ << ")";
+
+      // Retrieve the actual port assigned by the OS if port was 0
+      socklen_t addrlen = sizeof(addr);
+      if (getsockname(raw_socket, (struct sockaddr*)&addr, &addrlen) == 0) {
+          local_port_ = ntohs(addr.sin_port);
+      }
+
+      // Listen
+      if (::listen(raw_socket, 5) < 0) {
+        RTC_LOG(LS_ERROR) << "Failed to listen, errno: " << strerror(errno);
+        ::close(raw_socket);
+        return false;
+      }
+
+      // Wrap the listening socket
+      auto wrapped_socket = pss()->WrapSocket(raw_socket);
+      if (!wrapped_socket) {
+        RTC_LOG(LS_ERROR) << "Failed to wrap socket";
+        ::close(raw_socket);
+        return false;
+      }
+
+      listen_socket_ = std::make_unique<rtc::AsyncTcpListenSocket>(
+          std::unique_ptr<rtc::Socket>(wrapped_socket));
+      listen_socket_->SignalNewConnection.connect(this,
+                                                  &DirectCallee::OnNewConnection);
+
+      RTC_LOG(LS_INFO) << "Server listening on port " << local_port_;
+
+      #if TARGET_OS_IOS || TARGET_OS_OSX
+      // Bonjour advertisement
+      if (!opts_.bonjour_name.empty()) {
+          if (AdvertiseBonjourService(opts_.bonjour_name, local_port_)) {
+              RTC_LOG(LS_INFO) << "Bonjour advertised as '" << opts_.bonjour_name << "' on port " << local_port_;
+          } else {
+              RTC_LOG(LS_WARNING) << "Bonjour advertisement failed for '" << opts_.bonjour_name << "'";
+          }
+      }
+      #endif // #if TARGET_OS_IOS || TARGET_OS_OSX
+      return true;
+    } // End of retry loop
+    
+    // If we get here, all retry attempts failed
+    RTC_LOG(LS_ERROR) << "Failed to bind after " << kMaxRetries << " attempts within " 
+                      << kMaxRetryTimeMs << "ms timeout. Giving up.";
+    return false;
   };
   // If already on network thread, run directly to avoid BlockingCall DCHECK
   if (network_thread()->IsCurrent()) {

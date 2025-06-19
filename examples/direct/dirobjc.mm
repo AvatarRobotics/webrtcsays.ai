@@ -158,6 +158,24 @@ IPAddressResult GetLocalIPAddress() {
     return {ip, isWiFi};
 }
 
+// Callback for DNSServiceRegister
+static void DNSSD_API register_callback(
+    DNSServiceRef sdRef,
+    DNSServiceFlags flags,
+    DNSServiceErrorType errorCode,
+    const char *name,
+    const char *regtype,
+    const char *domain,
+    void *context)
+{
+    if (errorCode == kDNSServiceErr_NoError) {
+        RTC_LOG(LS_INFO) << "[Register] Service registered successfully: " << (name ? name : "null") 
+                         << " (" << (regtype ? regtype : "null") << ") in domain: " << (domain ? domain : "null");
+    } else {
+        RTC_LOG(LS_ERROR) << "[Register] Registration failed with error: " << errorCode;
+    }
+}
+
 bool DIRECT_API AdvertiseBonjourService(const std::string& name, int port) {
     if (g_advert_ref) {
         RTC_LOG(LS_INFO) << "Stopping existing Bonjour advertisement to update with current IP";
@@ -256,7 +274,7 @@ bool DIRECT_API AdvertiseBonjourService(const std::string& name, int port) {
         htons(port),
         txt_len,
         txt_len ? txt_buffer : nullptr,
-        nullptr, // callback
+        register_callback, // callback function
         nullptr  // context
     );
 
