@@ -736,9 +736,14 @@ if (rtc_include_tests && !build_with_chromium) {
       "//test:test_main",
       "//video",
       "//video:video_tests",
-      "//sdk:native_video",
-      "//sdk/objc/native/src:native_src_objc",
     ]
+
+    if (is_ios || is_mac) {
+      deps += [
+        "//sdk:native_video",
+        "//sdk/objc/native/src:native_src_objc",
+      ]
+    }
 
     data = video_engine_tests_resources
 

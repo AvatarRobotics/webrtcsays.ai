@@ -1092,7 +1092,10 @@ if (!build_with_chromium) {
         defines += [ "WEBRTC_SPEECH_DEVICES" ]
       }
 
-      cflags = [ "-mmacosx-version-min=15.0.0" ]
+      cflags = []
+      if (is_mac) {
+        cflags += [ "-mmacosx-version-min=15.0.0" ]
+      }
       if(is_debug) {
         cflags += ["-g", "-O0"]         
       }
@@ -1186,7 +1189,7 @@ if (!build_with_chromium) {
         ldflags += [ "-Wl,-rpath,@loader_path/../Default" ] # Adjust rpath if needed
       } else if (is_linux) {
         if (!defined(ldflags)) { ldflags = [] }
-        ldflags += [ "-Wl,-rpath,\\$$ORIGIN" ] # Standard rpath for Linux dylibs
+        ldflags += [ "-Wl,-rpath,\$ORIGIN" ] # Standard rpath for Linux dylibs
       }
       configs += []
     }
@@ -1198,9 +1201,9 @@ if (!build_with_chromium) {
     include_dirs = []
     sources = [ "direct/main.cc" ]
 
-    # Only set the minimum macOS deployment version for non-iOS builds.
+    # Only set the minimum macOS deployment version for macOS builds.
     cflags = []
-    if (!is_ios) {
+    if (is_mac) {
       cflags += [ "-mmacosx-version-min=15.0.0" ]
     }
     if (is_debug) {
@@ -1239,7 +1242,7 @@ if (!build_with_chromium) {
       } else if (is_linux) {
           if (!defined(ldflags)) { ldflags = [] }
           # Need rpath to find direct_lib relative to executable
-          ldflags += [ "-Wl,-rpath,\\$$ORIGIN" ]
+          ldflags += [ "-Wl,-rpath,\$ORIGIN" ]
       }
     }
 

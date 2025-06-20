@@ -773,9 +773,14 @@ if (rtc_include_tests) {
         "//third_party/abseil-cpp/absl/flags:flag",
         "//third_party/abseil-cpp/absl/strings:string_view",
         "//third_party/libyuv",
-        "//sdk/objc/native/src:native_src_objc",
-        "//sdk:native_video",
       ]
+
+      if (is_ios || is_mac) {
+        deps += [
+          "//sdk/objc/native/src:native_src_objc",
+          "//sdk:native_video",
+        ]
+      }
       sources = [
         "call_config_utils_unittest.cc",
         "direct_transport_unittest.cc",

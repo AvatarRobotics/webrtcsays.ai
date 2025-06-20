@@ -92,6 +92,14 @@
 // Include TargetConditionals for TARGET_OS_IOS or TARGET_OS_OSX macros
 #if defined(__APPLE__)
     #include <TargetConditionals.h>
+
+  // Inject Obj-C forward declarations only:
+  #if TARGET_OS_IOS && defined(__OBJC__)
+  #import "sdk/objc/base/RTCVideoCapturer.h"
+  #import "sdk/objc/components/renderer/metal/RTCMTLVideoView.h"
+  #import "sdk/objc/api/peerconnection/RTCVideoTrack.h"
+  #endif
+
 #endif
 
 #include "option.h"
@@ -102,14 +110,6 @@
 #include "modules/audio_device/speech/speech_audio_device_factory.h"
 #endif  // WEBRTC_SPEECH_DEVICES
 
-// Inject Obj-C forward declarations only:
-#if TARGET_OS_IOS && defined(__OBJC__)
-#import "sdk/objc/base/RTCVideoCapturer.h"
-#import "sdk/objc/components/renderer/metal/RTCMTLVideoView.h"
-#import "sdk/objc/api/peerconnection/RTCVideoTrack.h"
-#endif
-
-// Only include the C++ API for C++ consumers
 #ifdef __cplusplus
 
 class LambdaCreateSessionDescriptionObserver
@@ -452,9 +452,11 @@ class DIRECT_API DirectCaller : public DirectPeer {
   bool Connect();
 
   bool Connect(const char* ip, int port);
-#if TARGET_OS_IOS || TARGET_OS_OSX
-  bool ConnectWithBonjourName(const char* bonjour_name);
-#endif // #if TARGET_OS_IOS || TARGET_OS_OSX
+#if defined(__APPLE__)
+  #if TARGET_OS_IOS || TARGET_OS_OSX
+    bool ConnectWithBonjourName(const char* bonjour_name);
+  #endif // #if TARGET_OS_IOS || TARGET_OS_OSX
+#endif
 
   // bool SendMessage(const std::string& message);
   virtual void Disconnect() override;

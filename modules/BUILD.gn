@@ -68,8 +68,13 @@ if (rtc_include_tests && !build_with_chromium) {
       "rtp_rtcp:rtp_rtcp_modules_tests",
       "video_coding:video_coding_modules_tests",
       "//testing/gtest",
-      "//sdk/objc/native/src:native_src_objc",
     ]
+
+    if (is_ios || is_mac) {
+      deps += [
+        "//sdk/objc/native/src:native_src_objc",
+      ]
+    }
 
     if (rtc_desktop_capture_supported) {
       deps += [ "desktop_capture:desktop_capture_modules_tests" ]
@@ -227,8 +232,13 @@ if (rtc_include_tests && !build_with_chromium) {
       "video_coding:video_coding_unittests",
       "video_coding/deprecated:deprecated_unittests",
       "video_coding/timing:timing_unittests",
-      "//sdk/objc/native/src:native_src_objc",
     ]
+
+    if (is_ios || is_mac) {
+      deps += [
+        "//sdk/objc/native/src:native_src_objc",
+      ]
+    }
 
     if (rtc_desktop_capture_supported) {
       deps += [ "desktop_capture:desktop_capture_unittests" ]

@@ -52,6 +52,8 @@ DirectCaller::DirectCaller(Options opts)
         remote_addr_ = rtc::SocketAddress(ip, port);
     }
 #else
+    std::string ip;
+    int port = 0;    
     ParseIpAndPort(opts.address, ip, port);
     remote_addr_ = rtc::SocketAddress(ip, port);
 #endif // #if TARGET_OS_IOS || TARGET_OS_OSX

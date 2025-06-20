@@ -1,7 +1,8 @@
 import("../../../../webrtc.gni")
 
 # Target for the missing ObjCVideoTrackSource implementation
-rtc_library("native_src_objc") {
+if (is_ios || is_mac) {
+  rtc_library("native_src_objc") {
   visibility = [ "*" ]
   sources = [
     # Only include the sources that were causing linker errors
@@ -56,4 +57,5 @@ rtc_library("native_src_objc") {
   # if (is_mac) {
   #   frameworks += [ "AudioUnit.framework" ]
   # }
-} 
+  } 
+}
