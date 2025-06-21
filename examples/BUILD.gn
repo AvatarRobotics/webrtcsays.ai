@@ -754,6 +754,7 @@ if (is_linux || is_chromeos || is_win) {
       "../system_wrappers:field_trial",
       "../test:field_trial",
       "../test:frame_generator_capturer",
+      "../test:platform_video_capturer",
       "../test:rtp_test_utils",
       "//third_party/abseil-cpp/absl/memory",
       "//third_party/jsoncpp",

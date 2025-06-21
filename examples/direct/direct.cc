@@ -59,10 +59,15 @@ rtc::IPAddress IPFromString(absl::string_view str) {
 WhillatsLlama* DirectApplication::llama_ = nullptr;
 
 void llamaCallback(bool success, const char* response, void* user_data) {
-  if (success && *response && user_data) {
+  if (success && response && *response && user_data) {
     DirectApplication* app = static_cast<DirectApplication*>(user_data);
     if(app) {
+      // Safely handle the language string
       std::string language = webrtc::SpeechAudioDeviceFactory::GetLanguage();
+      if (language.empty()) {
+        language = "en";  // Default to English if empty
+      }
+      
       app->SendMessage("LLAMA:[" + language + "]" + std::string(response));
     }
   }
