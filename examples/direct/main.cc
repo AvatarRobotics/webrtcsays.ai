@@ -22,7 +22,8 @@
 
 #include "direct.h"
 #include "option.h"
-#include "room.h"
+#include "client.h"
+//#include "room.h"
 
 static volatile bool g_shutdown = false;
 static volatile int g_shutdown_count = 0;
@@ -82,16 +83,31 @@ int main(int argc, char* argv[]) {
   //DirectSetLoggingLevel(AS_INFO);
   DirectApplication::rtcInitialize();
 
-  std::unique_ptr<DirectCallee> callee;
-  std::unique_ptr<DirectCaller> caller;
-  std::unique_ptr<RoomCaller> room;
+  // Parse server address and room from options
+  std::string room_name = opts.room_name.empty() ? "room101" : opts.room_name;  // Use provided room or default
+   
+  // Validate required parameters for name-based calling
+  if (opts.user_name.empty()) {
+    fprintf(stderr, "Error: --user_name is required for name-based calling\n");
+    return 1;
+  }
+  
+  if (opts.mode == "caller" && opts.target_name.empty()) {
+    fprintf(stderr, "Error: --target_name is required when mode is caller\n");
+    return 1;
+  }
+
+  std::unique_ptr<DirectCalleeClient> callee;
+  std::unique_ptr<DirectCallerClient> caller;
+  
   if (opts.mode == "callee" or opts.mode == "both") {
     int session_count = 0;
     while (!g_shutdown) {
       session_count++;
       fprintf(stderr, "Starting callee session #%d\n", session_count);
       
-      callee = std::make_unique<DirectCallee>(opts);
+      callee = std::make_unique<DirectCalleeClient>(opts);
+      
       if (!callee->Initialize()) {
         fprintf(stderr, "failed to initialize callee\n");
         return 1;
@@ -104,7 +120,7 @@ int main(int argc, char* argv[]) {
 
       // Prepare new session and wait for CANCEL or Ctrl+C
       callee->ResetConnectionClosedEvent();
-      fprintf(stderr, "Callee ready for incoming connections...\n");
+      fprintf(stderr, "Callee ready for incoming connections in room %s...\n", room_name.c_str());
       
       while (!g_shutdown) {
         // Check shutdown more frequently with shorter timeout
@@ -138,39 +154,73 @@ int main(int argc, char* argv[]) {
   }
 
   if(opts.mode == "caller" or opts.mode == "both") {
-    opts.mode = "caller";
-    caller = std::make_unique<DirectCaller>(opts);
-    if (!caller->Initialize()) {
-      fprintf(stderr, "failed to initialize caller\n");
-      return 1;
+    int caller_session_count = 0;
+    while (!g_shutdown) {
+      caller_session_count++;
+      fprintf(stderr, "Starting caller session #%d\n", caller_session_count);
+      
+      caller = std::make_unique<DirectCallerClient>(opts);
+      
+      // Set the target user to call
+      if (!opts.target_name.empty()) {
+        caller->SetTargetUser(opts.target_name);
+        fprintf(stderr, "Caller will target user: %s\n", opts.target_name.c_str());
+      }
+      
+      if (!caller->Initialize()) {
+        fprintf(stderr, "failed to initialize caller\n");
+        return 1;
+      }
+      if (!caller->Connect()) {
+        fprintf(stderr, "failed to connect caller to room %s\n", room_name.c_str());
+        return 1;
+      }
+      caller->RunOnBackgroundThread();
+      fprintf(stderr, "Caller connected to room %s\n", room_name.c_str());
+      
+      // Wait for connection to close or shutdown signal
+      while (!g_shutdown) {
+        // Check shutdown more frequently with shorter timeout
+        if (caller->WaitUntilConnectionClosed(200)) {
+          fprintf(stderr, "Caller session #%d ended (connection closed/failed), restarting connection\n", caller_session_count);
+          break;
+        }
+        
+        // Check shutdown flag multiple times per second
+        if (g_shutdown) {
+          fprintf(stderr, "Shutdown requested during caller session #%d\n", caller_session_count);
+          break;
+        }
+      }
+      
+      // Signal quit immediately if shutdown is requested
+      if (g_shutdown && caller) {
+        fprintf(stderr, "Shutdown requested - signaling caller quit\n");
+        caller->Disconnect();
+      }
+      
+      caller.reset();
+      
+      if (!g_shutdown) {
+        fprintf(stderr, "Preparing to restart caller in 2 seconds...\n");
+        // Check for shutdown during sleep as well
+        for (int i = 0; i < 20 && !g_shutdown; i++) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+      }
     }
-    if (!caller->Connect()) {
-      fprintf(stderr, "failed to connect\n");
-      return 1;
-    }
-    caller->RunOnBackgroundThread();
   }
 
-  if(opts.mode == "room") {
-    room = std::make_unique<RoomCaller>(opts);
-    if (!room->Initialize()) {
-      fprintf(stderr, "failed to initialize room\n");
-      return 1;
-    }
-    if (!room->Connect()) {
-      fprintf(stderr, "failed to connect\n");
-      return 1;
-    }    
-    room->RunOnBackgroundThread();
-  }
-
-  while (!g_shutdown) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    
-    // Additional shutdown check for stuck scenarios
-    if (g_shutdown_count >= 2) {
-      fprintf(stderr, "Aggressive shutdown - breaking main loop\n");
-      break;
+  // Both callee and caller now have their own loops, so we just wait for shutdown
+  if (opts.mode != "caller" && opts.mode != "callee" && opts.mode != "both") {
+    while (!g_shutdown) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      
+      // Additional shutdown check for stuck scenarios
+      if (g_shutdown_count >= 2) {
+        fprintf(stderr, "Aggressive shutdown - breaking main loop\n");
+        break;
+      }
     }
   }
 
@@ -202,7 +252,7 @@ int main(int argc, char* argv[]) {
   if(opts.mode == "caller" or opts.mode == "both") {
     if (caller) {
       fprintf(stderr, "Signaling caller quit...\n");
-      caller->SignalQuit();
+      caller->Disconnect();
       caller.reset();
       fprintf(stderr, "Caller cleanup complete\n");
     }

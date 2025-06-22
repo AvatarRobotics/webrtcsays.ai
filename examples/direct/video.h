@@ -219,6 +219,9 @@ class LlamaVideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
   }
 
  public:
+  void set_is_llama(bool is_llama) { is_llama_ = is_llama; }
+  bool is_llama() { return is_llama_; }
+  
   void OnFrame(const webrtc::VideoFrame& frame) {
 
     if (!isVideoFrameBlack(frame)) {
@@ -246,10 +249,10 @@ class LlamaVideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
         yuv_data.v = std::make_unique<uint8_t[]>(uv_size);
         std::memcpy(yuv_data.v.get(), i420_buffer->DataV(), uv_size);
 
-        if (SpeechAudioDeviceFactory::llama()) {
+        if (is_llama_ && SpeechAudioDeviceFactory::llama()) {
           // Send video frame to be queued for later use with prompts
           SpeechAudioDeviceFactory::llama()->receiveVideoFrame(yuv_data);
-        }
+          }
       }
 
       received_frame_ = true;
@@ -258,6 +261,7 @@ class LlamaVideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
     }
   }
  private:
+  bool is_llama_ = false;
   bool received_frame_ = false;
 };
 

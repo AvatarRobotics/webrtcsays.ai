@@ -437,7 +437,6 @@ class DIRECT_API DirectCallee : public DirectPeer, public sigslot::has_slots<> {
   // Callee does not initiate connection, overrides base class
   bool Connect() { return false; }
 
- private:
   int local_port_;
   std::unique_ptr<rtc::AsyncTcpListenSocket> listen_socket_;
   std::unique_ptr<rtc::AsyncTCPSocket> current_client_socket_; // Dedicated client socket

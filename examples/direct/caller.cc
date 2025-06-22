@@ -36,7 +36,7 @@ DirectCaller::DirectCaller(Options opts)
 { 
 #if TARGET_OS_IOS || TARGET_OS_OSX
     // Bonjour discovery for iOS and macOS
-    if (!opts.bonjour_name.empty()) {
+    if (opts.bonjour && !opts.bonjour_name.empty()) {
         std::string ip;
         int port = 0;
         if (DiscoverBonjourService(opts.bonjour_name, ip, port)) {

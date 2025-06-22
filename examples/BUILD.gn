@@ -961,6 +961,10 @@ if (!build_with_chromium) {
         "direct/option.cc",
         "direct/room.cc",
         "direct/msoup.cc",
+        "direct/client.cc",
+        "direct/wsock.cc",
+        "direct/wsock.h",
+        "direct/client.h",
       ]
 
       # Use the output of the action_foreach target for public headers
@@ -1087,6 +1091,10 @@ if (!build_with_chromium) {
         "direct/option.cc",
         "direct/room.cc",
         "direct/msoup.cc",
+        "direct/client.cc",
+        "direct/wsock.cc",
+        "direct/wsock.h",
+        "direct/client.h",
       ]
 
       if (rtc_use_speech_audio_devices) {

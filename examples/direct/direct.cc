@@ -266,6 +266,12 @@ void DirectApplication::Run() {
 void DirectApplication::RunOnBackgroundThread() {
   RTC_DCHECK(!rtc::Thread::Current()); // Ensure not on a WebRTC thread yet
 
+  // If Initialize() has not been run yet, we have no main_thread_ to post to.
+  if (!main_thread_) {
+    RTC_LOG(LS_WARNING) << "RunOnBackgroundThread called before Initialize – ignoring.";
+    return;
+  }
+
   // Use main_thread_ instead of creating a new thread to avoid conflicts
   main_thread_->PostTask([this]() {
     while (!should_quit_) {
@@ -293,6 +299,10 @@ bool DirectApplication::Initialize() {
   main_thread_ = rtc::Thread::CreateWithSocketServer();
   main_thread_->socketserver()->SetMessageQueue(main_thread_.get());
   DirectThreadSetName(main_thread(), "Main");
+  if (!main_thread_->Start()) {
+    RTC_LOG(LS_ERROR) << "Failed to start main thread";
+    return false;
+  }
   ws_thread_ = rtc::Thread::Create();
   worker_thread_ = rtc::Thread::Create();
   signaling_thread_ = rtc::Thread::Create();
@@ -734,6 +744,7 @@ void DirectApplication::OnAddTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterfa
         if(!video_sink_) {
           RTC_LOG(LS_INFO) << "Initializing video sink for remote video track...";
           video_sink_ = std::make_unique<webrtc::LlamaVideoRenderer>();
+          ((webrtc::LlamaVideoRenderer*)video_sink_.get())->set_is_llama(opts_.llama);
         }
         
         if (video_sink_) {

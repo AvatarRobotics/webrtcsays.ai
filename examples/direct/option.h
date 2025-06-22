@@ -82,6 +82,7 @@ struct Options {
     bool llama = true;
     bool video = false;
     bool help = false;
+    bool bonjour = false;
     std::string help_string{};
     std::string config_path{}; // Path to JSON config file
     std::string whisper_model{};
@@ -97,6 +98,9 @@ struct Options {
     std::string turns{};
     std::string vpn{};
     std::string bonjour_name{}; // Name for Bonjour advertisement/discovery
+    std::string user_name{}; // Name of this user (for registration)
+    std::string target_name{}; // Name of user to call (for caller mode)
+    std::string room_name{}; // Room name to join
 };
 
 // Function to parse command line string to above options

@@ -240,10 +240,9 @@ RoomCaller::~RoomCaller() {
   running_ = false;
   if (wss_) {
     wss_->stop_listening();
-    if (wss_->sockfd != -1) {
-      APP_LOG(AS_INFO) << "Closing socket FD in destructor: " << wss_->sockfd;
-      ::close(wss_->sockfd);
-      wss_->sockfd = -1;
+    if (wss_->is_connected()) {
+      APP_LOG(AS_INFO) << "Disconnecting WebSocket in destructor";
+      wss_->stop_listening();
     }
   }
 
@@ -363,9 +362,8 @@ void RoomCaller::ReconnectWebSocket() {
   APP_LOG(AS_INFO) << "Reconnecting WebSocket (attempt " << reconnect_attempts_
                    << " of " << kMaxReconnectAttempts << ")...";
   wss_->stop_listening();
-  if (wss_->sockfd != -1) {
-    ::close(wss_->sockfd);
-    wss_->sockfd = -1;
+  if (wss_->is_connected()) {
+    wss_->stop_listening();
   }
 
   // Reset WebSocket state

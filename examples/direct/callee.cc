@@ -151,7 +151,7 @@ bool DirectCallee::StartListening() {
 
       #if TARGET_OS_IOS || TARGET_OS_OSX
       // Bonjour advertisement
-      if (!opts_.bonjour_name.empty()) {
+      if (opts_.bonjour && !opts_.bonjour_name.empty()) {
           if (AdvertiseBonjourService(opts_.bonjour_name, local_port_)) {
               RTC_LOG(LS_INFO) << "Bonjour advertised as '" << opts_.bonjour_name << "' on port " << local_port_;
           } else {
