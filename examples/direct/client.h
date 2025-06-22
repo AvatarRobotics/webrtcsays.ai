@@ -111,6 +111,7 @@ private:
     bool initialized_ = false;
     std::string resolved_target_ip_;
     int resolved_target_port_ = 0;
+    rtc::Thread* owner_thread_ = nullptr; // Thread where the object was created
 
 public:
     // Alternate constructor taking fully-populated Options directly

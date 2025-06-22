@@ -14,11 +14,17 @@
 #include <errno.h>
 #include <vector>
 #include <json/json.h>
+#include "rtc_base/thread.h"
 
 // DirectCallerClient Implementation
 
 DirectCallerClient::DirectCallerClient(const Options& opts)
-    : DirectCaller(opts), initialized_(false), resolved_target_port_(0) {
+    : DirectCaller(opts), initialized_(false) {
+    resolved_target_port_ = 0;   
+    if (!rtc::Thread::Current()) {
+        rtc::ThreadManager::Instance()->WrapCurrentThread();
+    }
+    owner_thread_ = rtc::Thread::Current();
     signaling_client_ = std::make_unique<DirectClient>(opts.user_name);
 }
 
@@ -30,6 +36,12 @@ bool DirectCallerClient::Initialize() {
     }
     
     APP_LOG(AS_INFO) << "Initializing DirectCallerClient for user: " << opts_.user_name;
+    // Call base class Initialize to set up WebRTC threads and members
+    if (!DirectCaller::Initialize()) {
+        APP_LOG(AS_ERROR) << "DirectCallerClient: base initialize failed";
+        return false;
+    }
+
     initialized_ = true;
     return true;
 }
@@ -107,8 +119,15 @@ bool DirectCallerClient::IsConnected() const {
 }
 
 void DirectCallerClient::RunOnBackgroundThread() {
-    DirectCaller::RunOnBackgroundThread();
-    APP_LOG(AS_INFO) << "DirectCallerClient running on background thread";
+    // If we are currently on an rtc::Thread (i.e., WebRTC internal thread),
+    // spawn a native thread to satisfy the DCHECK in DirectApplication.
+    if (rtc::Thread::Current()) {
+        std::thread([this]() {
+            DirectCaller::RunOnBackgroundThread();
+        }).detach();
+    } else {
+        DirectCaller::RunOnBackgroundThread();
+    }
 }
 
 bool DirectCallerClient::WaitUntilConnectionClosed(int timeout_ms) {
@@ -141,18 +160,8 @@ void DirectCallerClient::onPeerJoined(const std::string& peer_id) {
         signaling_client_->sendHelloToUser(opts_.target_name);
     }
     
-    // In a real implementation, this would be resolved via signaling server.
-    // For now use the same host we used for signaling (server_host_). If that host is
-    // "localhost" we translate it to 127.0.0.1 so that we avoid DNS lookup issues.
-    std::string target_ip; int unused_port = 0;
-    ParseIpAndPort(opts_.address, target_ip, unused_port);
-    if (target_ip == "localhost") {
-        target_ip = "127.0.0.1";
-    }
-    int target_port = 8888; // Default DirectCallee port
-    
-    APP_LOG(AS_INFO) << "DirectCallerClient: Attempting to connect to " << resolved_peer_id << " at " << target_ip << ":" << target_port;
-    initiateWebRTCCall(target_ip, target_port);
+    // Connection attempt will be made when we receive an ADDRESS message
+    APP_LOG(AS_INFO) << "DirectCallerClient: Waiting for address resolution for " << resolved_peer_id;
 }
 
 void DirectCallerClient::onPeerAddressResolved(const std::string& peer_id,
@@ -166,7 +175,10 @@ void DirectCallerClient::onPeerAddressResolved(const std::string& peer_id,
     APP_LOG(AS_INFO) << "DirectCallerClient: Address resolved for " << peer_id
                      << " -> " << ip << ":" << port;
 
-    initiateWebRTCCall(ip, port);
+    // Run call setup on a fresh native thread
+    std::thread([this, ip, port] {
+        initiateWebRTCCall(ip, port);
+    }).detach();
 }
 
 void DirectCallerClient::initiateWebRTCCall(const std::string& ip, int port) {
@@ -175,19 +187,20 @@ void DirectCallerClient::initiateWebRTCCall(const std::string& ip, int port) {
     // Update opts_.address so the base class knows the correct remote endpoint
     opts_.address = ip + ":" + std::to_string(port);
 
-    // Ensure base is initialized
-    if (!DirectCaller::Initialize()) {
-        APP_LOG(AS_ERROR) << "DirectCallerClient: base initialization failed";
-        return;
-    }
+    // We are already initialized; just proceed to connect
 
+    // Establish the raw socket/WebRTC signalling connection synchronously on
+    // this (native) thread.
     if (!DirectCaller::Connect(ip.c_str(), port)) {
         APP_LOG(AS_ERROR) << "Failed to connect DirectCaller to " << ip << ":" << port;
         return;
     }
 
-    RunOnBackgroundThread();
-    APP_LOG(AS_INFO) << "DirectCallerClient: WebRTC call initiated successfully";
+    // After the socket is connected, start the DirectApplication event loop
+    // on a detached native thread to keep processing.
+    std::thread([this]() {
+        this->RunOnBackgroundThread();
+    }).detach();
 }
 
 void DirectCallerClient::onAnswerReceived(const std::string& peer_id, const std::string& sdp) {
