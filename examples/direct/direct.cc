@@ -432,6 +432,28 @@ bool DirectApplication::CreatePeerConnection() {
     if (audio_device_module_) {
       RTC_LOG(LS_INFO) << "Audio device module created successfully on thread: "
                        << rtc::Thread::Current();
+
+      // Attempt to initialize the ADM.  On head-less Linux servers PulseAudio
+      // often isn't available which causes Init() to fail and WebRTC will
+      // crash later when the voice engine asserts.  Detect this early and
+      // transparently fall back to the dummy (no-audio) implementation so
+      // that signalling and video can still work.
+      int init_res = audio_device_module_->Init();
+      if (init_res != 0) {
+        RTC_LOG(LS_ERROR) << "Audio device module Init failed (" << init_res
+                          << "), switching to DummyAudio layer";
+
+        // Replace with dummy ADM – ignore return value, we tried our best.
+        audio_device_module_ = webrtc::AudioDeviceModule::Create(
+            webrtc::AudioDeviceModule::kDummyAudio,
+            task_queue_factory_ptr);
+        if (audio_device_module_) {
+          audio_device_module_->Init();
+          RTC_LOG(LS_INFO) << "Dummy audio device module created and initialized";
+        } else {
+          RTC_LOG(LS_ERROR) << "Failed to create Dummy audio device module";
+        }
+      }
     } else {
       RTC_LOG(LS_ERROR) << "Failed to create audio device module";
     }
