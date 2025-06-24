@@ -576,13 +576,23 @@ bool DirectApplication::CreatePeerConnection() {
           if (colon_pos != std::string::npos) {
               cricket::RelayServerConfig turn_config;
               turn_config.credentials = cricket::RelayCredentials(server.username, server.password);
+
+              // Determine desired protocol: default UDP, but respect "?transport=tcp" or "?transport=udp"
+              cricket::ProtocolType proto = cricket::PROTO_UDP;
+              if (server.uri.find("transport=tcp") != std::string::npos) {
+                  proto = cricket::PROTO_TCP;
+              } else if (server.uri.find("transport=ssl") != std::string::npos ||
+                         server.uri.find("transport=tls") != std::string::npos) {
+                  proto = cricket::PROTO_SSLTCP;
+              }
+
               turn_config.ports.push_back(cricket::ProtocolAddress(
                   rtc::SocketAddress(
                       host_port.substr(0, colon_pos),
                       atoi(host_port.substr(colon_pos + 1).c_str())),
-                  cricket::PROTO_UDP));
+                  proto));
               turn_servers.push_back(turn_config);
-              RTC_LOG(LS_INFO) << "TURN server parsed: " << host_port << " for URI: " << server.uri;
+              RTC_LOG(LS_INFO) << "TURN server parsed: " << host_port << " proto=" << proto << " for URI: " << server.uri;
           } else {
               RTC_LOG(LS_WARNING) << "Failed to parse TURN server port from URI: " << server.uri;
           }
