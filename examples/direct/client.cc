@@ -90,6 +90,9 @@ bool DirectCallerClient::Connect() {
     // Register with room for name-based discovery
     signaling_client_->registerWithRoom(opts_.room_name);
 
+    // Request initial user list
+    signaling_client_->requestUserList();
+
     // Immediately attempt to contact the target if one is specified. This is
     // important when using the lightweight raw-WebSocket signaling path which
     // currently does not broadcast explicit "peer-joined" events. By reusing
@@ -211,6 +214,13 @@ void DirectCallerClient::onAnswerReceived(const std::string& peer_id, const std:
 void DirectCallerClient::onIceCandidateReceived(const std::string& peer_id, const std::string& candidate) {
     // This would be handled by DirectCaller's internal WebRTC logic
     APP_LOG(AS_INFO) << "DirectCallerClient: ICE candidate received from " << peer_id;
+}
+
+bool DirectCallerClient::RequestUserList() {
+    if (signaling_client_) {
+        return signaling_client_->requestUserList();
+    }
+    return false;
 }
 
 // DirectCalleeClient Implementation  
@@ -424,6 +434,11 @@ bool DirectClient::sendHelloToUser(const std::string& target_user_id) {
     return ws_client_->send_message("HELLO:" + target_user_id);
 }
 
+bool DirectClient::requestUserList() {
+    if (!connected_) return false;
+    return ws_client_->send_message("USER_LIST");
+}
+
 // Stub methods (full parsing logic preserved elsewhere)
 void DirectClient::disconnect() {
     if (ws_client_) ws_client_->disconnect();
@@ -467,6 +482,21 @@ void DirectClient::handleProtocolMessage(const std::string& message) {
             }
         } else {
             APP_LOG(AS_WARNING) << "ADDRESS message malformed: " << message;
+        }
+    } else if (message.rfind("USER_LIST:", 0) == 0) {
+        // Format: USER_LIST:user1,user2,user3
+        std::vector<std::string> users;
+        std::string user_list_str = message.substr(10);
+        std::stringstream ss(user_list_str);
+        std::string user;
+        while (std::getline(ss, user, ',')) {
+            if (!user.empty()) {
+                users.push_back(user);
+            }
+        }
+        APP_LOG(AS_INFO) << "DirectClient received USER_LIST with " << users.size() << " users";
+        if (user_list_received_callback_) {
+            user_list_received_callback_(users);
         }
     }
 }

@@ -154,6 +154,17 @@ rawWsServer.on('connection', async (ws, req) => {
       if (clientData?.room) {
         await broadcastToRoom(clientData.room, message, socketId);
       }
+    } else if (message === 'USER_LIST') {
+      console.log(`Raw WebSocket USER_LIST request from ${clientData?.userId}`);
+      if (clientData?.room) {
+        const peers = await pubClient.hGetAll(`room:${clientData.room}`);
+        const uniq = [...new Set(Object.values(peers).map(p => JSON.parse(p).userId))];
+        const userList = uniq.filter(u => u !== clientData.userId).join(',');
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(`USER_LIST:${userList}`);
+          console.log(`Sent USER_LIST:${userList} to ${clientData.userId}`);
+        }
+      }
     } else {
       console.log(`Unknown raw WebSocket message from ${clientData?.userId}: ${message}`);
     }
@@ -300,6 +311,14 @@ io.on('connection', async (socket) => {
       if (socket.currentRoom) {
         socket.to(socket.currentRoom).emit('message', message);
       }
+    } else if (message === 'USER_LIST') {
+      console.log(`USER_LIST request from ${socket.user.userId}`);
+      if (socket.currentRoom) {
+        const peers = await pubClient.hGetAll(`room:${socket.currentRoom}`);
+        const uniq = [...new Set(Object.values(peers).map(p => JSON.parse(p).userId))];
+        const userList = uniq.filter(u => u !== socket.user.userId).join(',');
+        socket.emit('message', `USER_LIST:${userList}`);
+      }
     } else {
       console.log(`Unknown protocol message from ${socket.user.userId}: ${message}`);
     }
@@ -322,6 +341,9 @@ io.on('connection', async (socket) => {
     // Send current peer list to the new client
     const peers = await pubClient.hGetAll(`room:${room}`);
     socket.emit('peer-list', Object.values(peers).map(p => JSON.parse(p)));
+
+    // Notify all clients in the room to update their user list
+    io.to(room).emit('update-user-list');
   });
 
   // Handle WebRTC signaling
@@ -344,6 +366,8 @@ io.on('connection', async (socket) => {
         const peerData = JSON.parse(peer);
         socket.to(room).emit('peer-left', { id: socket.id, userId: peerData.userId });
         await pubClient.hDel(`room:${room}`, socket.id);
+        // Notify all clients in the room to update their user list
+        io.to(room).emit('update-user-list');
       }
     }
     console.log('Client disconnected:', socket.id);
@@ -360,6 +384,32 @@ app.post('/login', (req, res) => {
     res.json({ token });
   } else {
     res.status(401).json({ error: 'Invalid credentials' });
+  }
+});
+
+// Endpoint to get list of registered users with pagination
+app.get('/users/:room', async (req, res) => {
+  const room = req.params.room;
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const offset = (page - 1) * limit;
+
+  try {
+    const peers = await pubClient.hGetAll(`room:${room}`);
+    const peerList = Object.values(peers).map(p => JSON.parse(p));
+    const total = peerList.length;
+    const paginatedList = peerList.slice(offset, offset + limit);
+
+    res.json({
+      page,
+      limit,
+      total,
+      pages: Math.ceil(total / limit),
+      users: paginatedList
+    });
+  } catch (error) {
+    console.error('Error fetching user list:', error);
+    res.status(500).json({ error: 'Failed to fetch user list' });
   }
 });
 

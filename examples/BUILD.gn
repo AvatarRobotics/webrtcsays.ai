@@ -924,6 +924,8 @@ if (!build_with_chromium) {
       sources = [
         "direct/direct.h",
         "direct/option.h",
+        "direct/client.h",
+        "direct/wsock.h"
       ]
       outputs = [
         "$target_gen_dir/direct.framework/Headers/{{source_file_part}}",

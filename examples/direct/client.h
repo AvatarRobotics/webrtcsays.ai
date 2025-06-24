@@ -34,6 +34,7 @@ using OfferReceivedCallback = std::function<void(const std::string& peer_id, con
 using AnswerReceivedCallback = std::function<void(const std::string& peer_id, const std::string& sdp)>;
 using IceCandidateReceivedCallback = std::function<void(const std::string& peer_id, const std::string& candidate)>;
 using HelloReceivedCallback = std::function<void(const std::string& peer_id)>;
+using UserListReceivedCallback = std::function<void(const std::vector<std::string>& user_ids)>;
 
 // Callback for receiving a direct IP:port address for a peer
 using AddressReceivedCallback = std::function<void(const std::string& user_id,
@@ -60,6 +61,7 @@ public:
     void setIceCandidateReceivedCallback(IceCandidateReceivedCallback callback) { ice_candidate_received_callback_ = callback; }
     void setHelloReceivedCallback(HelloReceivedCallback callback) { hello_received_callback_ = callback; }
     void setAddressReceivedCallback(AddressReceivedCallback callback) { address_received_callback_ = callback; }
+    void setUserListReceivedCallback(UserListReceivedCallback callback) { user_list_received_callback_ = callback; }
   
     // Message sending methods
     bool sendOffer(const std::string& target_peer_id, const std::string& sdp);
@@ -69,6 +71,7 @@ public:
     bool sendBye();
     bool sendCancel();
     bool sendHelloToUser(const std::string& target_user_id);  // Send HELLO to specific user
+    bool requestUserList();  // Request list of users from signaling server
     
 protected:
     std::unique_ptr<WebSocketClient> ws_client_;
@@ -86,6 +89,7 @@ protected:
     IceCandidateReceivedCallback ice_candidate_received_callback_;
     HelloReceivedCallback hello_received_callback_;
     AddressReceivedCallback address_received_callback_;
+    UserListReceivedCallback user_list_received_callback_;
     
 private:
     std::string getJwtToken(const std::string& server_host, int server_port, 
@@ -112,6 +116,7 @@ private:
     std::string resolved_target_ip_;
     int resolved_target_port_ = 0;
     rtc::Thread* owner_thread_ = nullptr; // Thread where the object was created
+    UserListReceivedCallback user_list_callback_;
 
 public:
     // Alternate constructor taking fully-populated Options directly
@@ -127,6 +132,10 @@ public:
     
     // Set target user to call by name
     void SetTargetUser(const std::string& target_user_id) { opts_.target_name = target_user_id; }
+    
+    // Add SetUserListCallback and RequestUserList to DirectCallerClient public section
+    void SetUserListCallback(UserListReceivedCallback callback) { signaling_client_->setUserListReceivedCallback(callback); }
+    bool RequestUserList();
     
 private:
     void onPeerJoined(const std::string& peer_id);

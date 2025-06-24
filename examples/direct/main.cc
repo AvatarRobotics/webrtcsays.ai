@@ -85,6 +85,8 @@ int main(int argc, char* argv[]) {
 
   // Parse server address and room from options
   std::string room_name = opts.room_name.empty() ? "room101" : opts.room_name;  // Use provided room or default
+  // Ensure opts.room_name is set so that callee/caller register correctly
+  opts.room_name = room_name;
    
   // Validate required parameters for name-based calling
   if (opts.user_name.empty()) {
