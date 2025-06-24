@@ -174,3 +174,34 @@ private:
     void publishAddressToSignalingServer();
     void onIceCandidateReceived(const std::string& peer_id, const std::string& candidate);
 };
+
+// ---------------------------------------------------------------------------
+//  C-friendly wrapper: allows Objective-C / Swift etc. to register a callback
+//  without constructing a std::function object in the caller's binary – this
+//  prevents libc++ ABI mismatches between the framework and the application.
+//
+//  The wrapper lives inside the framework (compiled with the same tool-chain
+//  as the rest of the C++ code) and internally converts the plain C callback
+//  into the std::function that DirectClient expects.
+// ---------------------------------------------------------------------------
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef void (*DirectUserListCallbackC)(const char** users,
+                                        int          count,
+                                        void*        context);
+
+// Registers a C-style callback that will be invoked whenever a fresh list of
+// user IDs is received from the signaling server. The callback is executed on
+// the signaling / network thread, therefore the callee must forward to the UI
+// thread if UI work is required.
+EXPORT_API void DirectCallerClient_SetUserListCallbackC(
+        DirectCallerClient*       client,
+        DirectUserListCallbackC   callback,
+        void*                     context);
+
+#ifdef __cplusplus
+} // extern "C"
+#endif

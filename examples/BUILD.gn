@@ -388,22 +388,6 @@ if (is_ios) {
       # Conditionally link Whillats and its dependencies
       if (rtc_use_speech_audio_devices) {
         configs += [ "//sdk:whillats_framework_config" ]
-
-        # Conditionally link whisper and llama
-        _whisper_framework_dir = rebase_path("//modules/third_party/whillats/third_party/whisper.cpp/build-apple/whisper.xcframework/ios-arm64", root_build_dir)
-        _llama_framework_dir = rebase_path("//modules/third_party/whillats/third_party/llama.cpp/build-apple/llama.xcframework/ios-arm64", root_build_dir)
-
-        if (!defined(ldflags)) { ldflags = [] }
-        if (!defined(frameworks)) { frameworks = [] }
-
-        ldflags += [
-          "-F" + _whisper_framework_dir,
-          "-F" + _llama_framework_dir,
-        ]
-        frameworks += [
-          "whisper.framework",
-          "llama.framework",
-        ]
       }
     }
 
@@ -1047,24 +1031,6 @@ if (!build_with_chromium) {
       # Conditionally add the whillats config for direct_framework
       if (rtc_use_speech_audio_devices) {
         configs += [ "//sdk:whillats_framework_config" ]
-      }
-
-      # Conditionally link whisper and llama
-      if (rtc_use_speech_audio_devices) {
-        _whisper_framework_dir = rebase_path("//modules/third_party/whillats/third_party/whisper.cpp/build-apple/whisper.xcframework/ios-arm64", root_build_dir)
-        _llama_framework_dir = rebase_path("//modules/third_party/whillats/third_party/llama.cpp/build-apple/llama.xcframework/ios-arm64", root_build_dir)
-
-        if (!defined(ldflags)) { ldflags = [] }
-        if (!defined(frameworks)) { frameworks = [] }
-
-        ldflags += [
-          "-F" + _whisper_framework_dir,
-          "-F" + _llama_framework_dir,
-        ]
-        frameworks += [
-          "whisper.framework",
-          "llama.framework",
-        ]
       }
     }
 

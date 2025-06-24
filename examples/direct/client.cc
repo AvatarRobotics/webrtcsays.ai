@@ -502,4 +502,46 @@ void DirectClient::handleProtocolMessage(const std::string& message) {
 }
 
 // -----------------------------------------------------------------------------
+// C-compatible wrapper implementation
+
+struct _DirectUserListThunk {
+    DirectUserListCallbackC  c_callback;
+    void*                    c_context;
+    // We keep the converted std::function alive by storing it in the struct so
+    // that the lambda's captured std::string pointers stay valid for the
+    // lifetime of the thunk (which we tie to the DirectCallerClient instance).
+    std::function<void(const std::vector<std::string>&)>  cpp_func;
+};
+
+void DirectCallerClient_SetUserListCallbackC(DirectCallerClient*       client,
+                                             DirectUserListCallbackC   callback,
+                                             void*                     context) {
+    if (!client || !callback) {
+        return;
+    }
+
+    auto thunk = std::make_shared<_DirectUserListThunk>();
+    thunk->c_callback = callback;
+    thunk->c_context  = context;
+
+    // Wrap C callback into std::function that DirectCallerClient expects.
+    thunk->cpp_func = [thunk](const std::vector<std::string>& users) {
+        // Convert std::vector<std::string> to array of const char* expected by C callback
+        std::vector<const char*> c_strings;
+        c_strings.reserve(users.size());
+        for (const auto& s : users) {
+            c_strings.push_back(s.c_str());
+        }
+        thunk->c_callback(c_strings.data(), static_cast<int>(c_strings.size()), thunk->c_context);
+    };
+
+    client->SetUserListCallback(thunk->cpp_func);
+
+    // NOTE: We intentionally do *not* free the thunk; it will live as long as
+    // the DirectCallerClient holds a copy of the std::function (which captures
+    // the shared_ptr). When the client resets the callback or is destroyed the
+    // shared_ptr ref-count drops to zero and the thunk is deleted.
+}
+
+// -----------------------------------------------------------------------------
 
