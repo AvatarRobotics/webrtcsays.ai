@@ -259,27 +259,10 @@ void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
 }
 
 void DirectCallee::OnCancel(rtc::AsyncPacketSocket* socket) {
-  RTC_LOG(LS_INFO) << "Callee socket closed";
   if (socket == tcp_socket_.get()) {
-    // Full teardown and re-init on main thread
-    main_thread()->PostTask([this]() {
-      RTC_LOG(LS_INFO) << "Full teardown initiated via CANCEL";
-      // 1) Cleanup completely (threads, sockets, factories)
-      Cleanup();
-      // 2) Re-initialize threads and WebRTC infrastructure
-      if (!Initialize()) {
-        RTC_LOG(LS_ERROR) << "Re-initialize failed after CANCEL";
-        return;
-      }
-      // 3) Restart listening socket
-      if (!StartListening()) {
-        RTC_LOG(LS_ERROR) << "StartListening failed after CANCEL";
-        return;
-      }
-      // 4) Resume background processing
-      RunOnBackgroundThread();
-      RTC_LOG(LS_INFO) << "Callee fully restarted after CANCEL.";
-    });
+    // Just signal the higher-level loop that the current session is done.
+    connection_closed_event_.Set();
+    RTC_LOG(LS_INFO) << "Callee CANCEL → connection_closed_event signalled; session will terminate cleanly.";
   } else {
     RTC_LOG(LS_WARNING) << "Received CANCEL on an unexpected socket.";
   }
