@@ -67,6 +67,7 @@ public:
     bool sendOffer(const std::string& target_peer_id, const std::string& sdp);
     bool sendAnswer(const std::string& target_peer_id, const std::string& sdp);
     bool sendIceCandidate(const std::string& target_peer_id, const std::string& candidate);
+    bool sendAddress(const std::string& user_id, const std::string& ip, int port);
     bool sendInit();
     bool sendBye();
     bool sendCancel();

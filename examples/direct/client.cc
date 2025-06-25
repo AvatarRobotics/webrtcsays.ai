@@ -345,12 +345,42 @@ void DirectCalleeClient::setupWebRTCListener() {
 }
 
 void DirectCalleeClient::publishAddressToSignalingServer() {
-    // In a real implementation, we would publish our listening address to the signaling server
-    // so that callers can resolve our name to our IP:port
-    APP_LOG(AS_INFO) << "DirectCalleeClient: Publishing address to signaling server (user: " << opts_.user_name << ", port: " << local_port_ << ")";
-    
-    // For now, we just log that we're available
-    // The signaling server would need to support an "REGISTER_ADDRESS" message
+    if (!signaling_client_ || !signaling_client_->isConnected()) {
+        APP_LOG(AS_WARNING) << "Cannot publish address – signaling client not connected";
+        return;
+    }
+
+    // Discover first non-loopback IPv4 address (very lightweight)
+    std::string lan_ip = "127.0.0.1";
+#ifdef __APPLE__
+    char hostname[256];
+    if (gethostname(hostname, sizeof(hostname)) == 0) {
+        struct addrinfo hints = {};
+        hints.ai_family = AF_INET; // IPv4 only
+        hints.ai_socktype = SOCK_STREAM;
+        struct addrinfo* info = nullptr;
+        if (getaddrinfo(hostname, nullptr, &hints, &info) == 0) {
+            for (auto* p = info; p; p = p->ai_next) {
+                char ip[INET_ADDRSTRLEN];
+                void* addr_ptr = &((struct sockaddr_in*)p->ai_addr)->sin_addr;
+                if (inet_ntop(AF_INET, addr_ptr, ip, sizeof(ip))) {
+                    std::string candidate(ip);
+                    if (candidate != "127.0.0.1") {
+                        lan_ip = candidate;
+                        break;
+                    }
+                }
+            }
+            freeaddrinfo(info);
+        }
+    }
+#endif
+
+    if (signaling_client_->sendAddress(opts_.user_name, lan_ip, local_port_)) {
+        APP_LOG(AS_INFO) << "Published LAN address to signaling server: " << lan_ip << ":" << local_port_;
+    } else {
+        APP_LOG(AS_WARNING) << "Failed to publish ADDRESS message to signaling server";
+    }
 }
 
 void DirectCalleeClient::onIncomingCall(const std::string& peer_id, const std::string& sdp) {
@@ -439,6 +469,45 @@ bool DirectClient::requestUserList() {
     return ws_client_->send_message("USER_LIST");
 }
 
+bool DirectClient::sendOffer(const std::string& target_peer_id, const std::string& sdp) {
+    if (!connected_) return false;
+    std::string msg = "OFFER:" + user_id_ + ":" + sdp;
+    return ws_client_->send_message(msg);
+}
+
+bool DirectClient::sendAnswer(const std::string& target_peer_id, const std::string& sdp) {
+    if (!connected_) return false;
+    std::string msg = "ANSWER:" + user_id_ + ":" + sdp;
+    return ws_client_->send_message(msg);
+}
+
+bool DirectClient::sendIceCandidate(const std::string& target_peer_id, const std::string& candidate) {
+    if (!connected_) return false;
+    std::string msg = "ICE:" + user_id_ + ":" + candidate;
+    return ws_client_->send_message(msg);
+}
+
+bool DirectClient::sendInit() {
+    if (!connected_) return false;
+    return ws_client_->send_message("INIT");
+}
+
+bool DirectClient::sendBye() {
+    if (!connected_) return false;
+    return ws_client_->send_message("BYE");
+}
+
+bool DirectClient::sendCancel() {
+    if (!connected_) return false;
+    return ws_client_->send_message("CANCEL");
+}
+
+bool DirectClient::sendAddress(const std::string& user_id, const std::string& ip, int port) {
+    if (!connected_) return false;
+    std::string msg = "ADDRESS:" + user_id + ":" + ip + ":" + std::to_string(port);
+    return ws_client_->send_message(msg);
+}
+
 // Stub methods (full parsing logic preserved elsewhere)
 void DirectClient::disconnect() {
     if (ws_client_) ws_client_->disconnect();
@@ -497,6 +566,56 @@ void DirectClient::handleProtocolMessage(const std::string& message) {
         APP_LOG(AS_INFO) << "DirectClient received USER_LIST with " << users.size() << " users";
         if (user_list_received_callback_) {
             user_list_received_callback_(users);
+        }
+    } else if (message.rfind("OFFER:", 0) == 0) {
+        // Format: OFFER:peer_id:sdp
+        size_t first_colon = message.find(':'); // after OFFER
+        size_t second_colon = message.find(':', first_colon + 1);
+        if (second_colon != std::string::npos) {
+            std::string peerId = message.substr(first_colon + 1, second_colon - first_colon - 1);
+            std::string sdp = message.substr(second_colon + 1);
+            if (peerId == user_id_) {
+                return; // Ignore our own offer broadcast
+            }
+            APP_LOG(AS_INFO) << "DirectClient received OFFER from " << peerId;
+            if (offer_received_callback_) {
+                offer_received_callback_(peerId, sdp);
+            }
+        } else {
+            APP_LOG(AS_WARNING) << "Malformed OFFER message: " << message;
+        }
+    } else if (message.rfind("ANSWER:", 0) == 0) {
+        // Format: ANSWER:peer_id:sdp
+        size_t first_colon = message.find(':');
+        size_t second_colon = message.find(':', first_colon + 1);
+        if (second_colon != std::string::npos) {
+            std::string peerId = message.substr(first_colon + 1, second_colon - first_colon - 1);
+            std::string sdp = message.substr(second_colon + 1);
+            if (peerId == user_id_) {
+                return; // Ignore our own answer broadcast
+            }
+            APP_LOG(AS_INFO) << "DirectClient received ANSWER from " << peerId;
+            if (answer_received_callback_) {
+                answer_received_callback_(peerId, sdp);
+            }
+        } else {
+            APP_LOG(AS_WARNING) << "Malformed ANSWER message: " << message;
+        }
+    } else if (message.rfind("ICE:", 0) == 0) {
+        // Format: ICE:peer_id:candidate
+        size_t first_colon = message.find(':');
+        size_t second_colon = message.find(':', first_colon + 1);
+        if (second_colon != std::string::npos) {
+            std::string peerId = message.substr(first_colon + 1, second_colon - first_colon - 1);
+            std::string candidate = message.substr(second_colon + 1);
+            if (peerId == user_id_) {
+                return; // Ignore our own ICE broadcast
+            }
+            if (ice_candidate_received_callback_) {
+                ice_candidate_received_callback_(peerId, candidate);
+            }
+        } else {
+            APP_LOG(AS_WARNING) << "Malformed ICE message: " << message;
         }
     }
 }
