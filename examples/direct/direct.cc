@@ -103,17 +103,29 @@ void DirectApplication::Cleanup() {
       RTC_LOG(LS_INFO) << "Video sink preserved for potential reuse.";
   }
 
-  // Explicitly release PeerConnectionFactory and ADM references on the worker thread before stopping threads
-  if (worker_thread()->IsCurrent()) {
+  // Explicitly terminate and release the AudioDeviceModule (ADM) – doing this
+  // on the worker thread that owns the ADM prevents race-conditions with the
+  // audio callback threads that would otherwise access freed memory and crash
+  // (observed as segfaults right after "failed to retrieve the playout delay").
+  auto adm_shutdown_lambda = [this]() {
+      if (audio_device_module_) {
+        RTC_LOG(LS_INFO) << "Terminating AudioDeviceModule before destruction";
+        // Best-effort: ignore return value – some back-ends may not implement
+        // Terminate() and simply return an error code.
+        audio_device_module_->Terminate();
+      }
       peer_connection_factory_ = nullptr;
       dependencies_.adm = nullptr;
       audio_device_module_ = nullptr;
+  };
+
+  if (worker_thread() && worker_thread()->IsCurrent()) {
+      adm_shutdown_lambda();
+  } else if (worker_thread()) {
+      worker_thread()->BlockingCall(adm_shutdown_lambda);
   } else {
-      worker_thread()->BlockingCall([this]() {
-          peer_connection_factory_ = nullptr;
-          dependencies_.adm = nullptr;
-          audio_device_module_ = nullptr;
-      });
+      // Fallback: if worker_thread_ is already gone execute directly.
+      adm_shutdown_lambda();
   }
 
   if (rtc::Thread::Current() != main_thread_.get()) {
