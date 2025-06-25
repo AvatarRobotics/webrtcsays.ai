@@ -260,6 +260,15 @@ void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
 
 void DirectCallee::OnCancel(rtc::AsyncPacketSocket* socket) {
   if (socket == tcp_socket_.get()) {
+    // Proactively close the TCP connection so that no further packets can
+    // arrive after we have scheduled the session for teardown.  Leaving it
+    // open created a race-condition where the network thread delivered data
+    // to an AsyncTCPSocket whose owning DirectCallee instance had already
+    // been destroyed, resulting in a segmentation fault.
+    if (tcp_socket_) {
+      RTC_LOG(LS_INFO) << "Callee CANCEL → proactively closing TCP socket.";
+      tcp_socket_->Close();
+    }
     // Just signal the higher-level loop that the current session is done.
     connection_closed_event_.Set();
     RTC_LOG(LS_INFO) << "Callee CANCEL → connection_closed_event signalled; session will terminate cleanly.";
