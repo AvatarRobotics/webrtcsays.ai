@@ -143,6 +143,14 @@ int main(int argc, char* argv[]) {
         callee->SignalQuit();
       }
       
+      // Always signal internal threads to quit before destroying the object
+      if (callee) {
+        fprintf(stderr, "Signaling callee quit (session teardown)\n");
+        callee->SignalQuit();
+        // Give threads a short grace period to exit cleanly
+        callee->WaitUntilConnectionClosed(500);
+      }
+      
       callee.reset();
       
       if (!g_shutdown) {
