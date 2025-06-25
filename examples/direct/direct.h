@@ -291,6 +291,9 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
   std::unique_ptr<rtc::AsyncTCPSocket> tcp_socket_;
 
   std::atomic<bool> should_quit_{false};
+  // Ensures Cleanup() body runs only once even if called from multiple
+  // threads (e.g. background thread and destructor).
+  std::atomic<bool> cleaned_up_{false};
 
   static constexpr int kDebugNoEncryptionMode = true;
 

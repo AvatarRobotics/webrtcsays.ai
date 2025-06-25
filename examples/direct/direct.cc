@@ -86,6 +86,12 @@ DirectApplication::DirectApplication(Options opts)
 }
 
 void DirectApplication::Cleanup() {
+  // Ensure this method executes only once.
+  if (cleaned_up_.exchange(true)) {
+    RTC_LOG(LS_INFO) << "Cleanup already performed – skipping.";
+    return;
+  }
+
   // Explicitly close and release PeerConnection via Shutdown before stopping threads
   ShutdownInternal();
 
