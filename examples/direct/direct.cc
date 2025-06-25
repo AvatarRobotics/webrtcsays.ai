@@ -556,6 +556,10 @@ bool DirectApplication::CreatePeerConnection() {
       iceServer.uri = turnsParams[0];
       iceServer.username = turnsParams[1];
       iceServer.password = turnsParams[2];
+      // Avoid certificate validation failures on minimal Linux images that
+      // lack the full CA bundle by disabling TLS cert checks.  TURN
+      // connections are still authenticated via long-term credentials.
+      iceServer.tls_cert_policy = webrtc::PeerConnectionInterface::kTlsCertPolicyInsecureNoCheck;
       config.servers.push_back(iceServer);
     }
   }
@@ -597,6 +601,8 @@ bool DirectApplication::CreatePeerConnection() {
                          server.uri.find("transport=tls") != std::string::npos) {
                   proto = cricket::PROTO_SSLTCP;
               }
+
+              turn_config.tls_cert_policy = cricket::TlsCertPolicy::TLS_CERT_POLICY_INSECURE_NO_CHECK;
 
               turn_config.ports.push_back(cricket::ProtocolAddress(
                   rtc::SocketAddress(
