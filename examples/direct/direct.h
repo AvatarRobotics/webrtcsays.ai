@@ -104,7 +104,7 @@
 
 #include "option.h"
 
-#define LLAMA_NOTIFICATION_ENABLED 1
+//#define LLAMA_NOTIFICATION_ENABLED 0
 
 #ifdef WEBRTC_SPEECH_DEVICES
 #include "modules/audio_device/speech/speech_audio_device_factory.h"
@@ -337,7 +337,7 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
   std::vector<rtc::Socket*> tracked_sockets_;
 
   // Set video capturer from Objective-C
-#if LLAMA_NOTIFICATION_ENABLED
+#ifdef LLAMA_NOTIFICATION_ENABLED
   static WhillatsLlama* llama_;
   WhillatsSetResponseCallback llamaCallback_;
 #endif

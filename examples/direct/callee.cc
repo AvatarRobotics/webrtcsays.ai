@@ -30,6 +30,10 @@
 #include "bonjour.h"
 #endif // #if TARGET_OS_IOS || TARGET_OS_OSX
 
+#if defined(__APPLE__) && !defined(SO_REUSEPORT)
+#define SO_REUSEPORT 0x0200
+#endif
+
 // DirectCallee Implementation
 DirectCallee::DirectCallee(Options opts) : DirectPeer(opts) {
   std::string ip;
@@ -44,6 +48,7 @@ DirectCallee::~DirectCallee() {
   if (listen_socket_) {
     listen_socket_.reset();
   }
+  video_sink_.reset();
 }
 
 bool DirectCallee::StartListening() {
@@ -78,6 +83,15 @@ bool DirectCallee::StartListening() {
         RTC_LOG(LS_WARNING) << "Failed to set SO_REUSEADDR, errno: " << strerror(errno);
         // Continue anyway, this is not fatal
       }
+
+#ifdef SO_REUSEPORT
+      // macOS/IPV4 requires SO_REUSEPORT together with SO_REUSEADDR to rebind
+      // to a port that is still in TIME_WAIT. This allows the listener to
+      // restart immediately on the same port after a previous connection.
+      if (::setsockopt(raw_socket, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse)) < 0) {
+        RTC_LOG(LS_WARNING) << "Failed to set SO_REUSEPORT, errno: " << strerror(errno);
+      }
+#endif
 
       // Setup server address
       struct sockaddr_in addr;
@@ -269,9 +283,11 @@ void DirectCallee::OnCancel(rtc::AsyncPacketSocket* socket) {
       RTC_LOG(LS_INFO) << "Callee CANCEL → proactively closing TCP socket.";
       tcp_socket_->Close();
     }
-    // Just signal the higher-level loop that the current session is done.
-    connection_closed_event_.Set();
-    RTC_LOG(LS_INFO) << "Callee CANCEL → connection_closed_event signalled; session will terminate cleanly.";
+    // PeerConnection teardown but listener remains active for next call.
+    ShutdownInternal();
+    // Reset socket to allow new connections
+    tcp_socket_.reset();
+    RTC_LOG(LS_INFO) << "Callee session cleaned up; listener remains active for next connection.";
   } else {
     RTC_LOG(LS_WARNING) << "Received CANCEL on an unexpected socket.";
   }

@@ -19,6 +19,7 @@
 #include <arpa/inet.h>
 #include <errno.h> // For errno
 #include <chrono>
+#include <thread>
 
 #include "direct.h"
 
@@ -81,12 +82,7 @@ bool DirectCaller::ConnectWithBonjourName(const char* bonjour_name) {
 
 bool DirectCaller::Connect() {
     auto task = [this]() -> bool {
-        // Create raw socket
-        int raw_socket = ::socket(AF_INET, SOCK_STREAM, 0);
-        if (raw_socket < 0) {
-            RTC_LOG(LS_ERROR) << "Failed to create raw socket, errno: " << strerror(errno);
-            return false;
-        }
+        int raw_socket = -1; // will be set upon successful connection
 
         // Setup local address
         struct sockaddr_in local_addr;
@@ -94,13 +90,6 @@ bool DirectCaller::Connect() {
         local_addr.sin_family = AF_INET;
         local_addr.sin_port = 0;
         local_addr.sin_addr.s_addr = INADDR_ANY;
-
-        // Bind
-        if (::bind(raw_socket, reinterpret_cast<struct sockaddr*>(&local_addr), sizeof(local_addr)) < 0) {
-            RTC_LOG(LS_ERROR) << "Failed to bind raw socket, errno: " << strerror(errno);
-            ::close(raw_socket);
-            return false;
-        }
 
         // Setup remote address
         struct sockaddr_in remote_addr;
@@ -111,11 +100,47 @@ bool DirectCaller::Connect() {
 
         RTC_LOG(LS_INFO) << "Attempting to connect to " << remote_addr_.ToString();
 
-        // Connect
-        if (::connect(raw_socket, reinterpret_cast<struct sockaddr*>(&remote_addr), sizeof(remote_addr)) < 0) {
-            RTC_LOG(LS_ERROR) << "Failed to connect raw socket, errno: " << strerror(errno);
-            ::close(raw_socket);
-            return false;
+        const int kMaxConnectAttempts = 20; // allow up to ~1 minute total wait
+        const int kInitialDelayMs = 100; // first retry delay
+
+        int attempt = 0;
+        int raw_socket_current = -1;
+
+        while (attempt < kMaxConnectAttempts) {
+            // Create a fresh socket for each attempt to avoid bad state after a failed connect.
+            raw_socket_current = ::socket(AF_INET, SOCK_STREAM, 0);
+            if (raw_socket_current < 0) {
+                RTC_LOG(LS_ERROR) << "Failed to create raw socket on attempt " << (attempt + 1) << ", errno: " << strerror(errno);
+                return false;
+            }
+
+            // Bind to ephemeral local port
+            if (::bind(raw_socket_current, reinterpret_cast<struct sockaddr*>(&local_addr), sizeof(local_addr)) < 0) {
+                RTC_LOG(LS_ERROR) << "Failed to bind raw socket on attempt " << (attempt + 1) << ", errno: " << strerror(errno);
+                ::close(raw_socket_current);
+                return false;
+            }
+
+            if (::connect(raw_socket_current, reinterpret_cast<struct sockaddr*>(&remote_addr), sizeof(remote_addr)) == 0) {
+                raw_socket = raw_socket_current; // success
+                break;
+            }
+
+            int err = errno;
+            RTC_LOG(LS_WARNING) << "Connect attempt " << (attempt + 1) << " failed (" << strerror(err) << ")";
+            ::close(raw_socket_current);
+
+            ++attempt;
+            if (attempt >= kMaxConnectAttempts) {
+                RTC_LOG(LS_ERROR) << "Failed to connect raw socket after " << kMaxConnectAttempts << " attempts.";
+                return false;
+            }
+
+            // Exponential back-off, cap to 4 seconds
+            int delay_ms = kInitialDelayMs * (1 << std::min(attempt, 5));
+            delay_ms = std::min(delay_ms, 4000);
+            RTC_LOG(LS_INFO) << "Retrying connect in " << delay_ms << " ms";
+            std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
         }
 
         RTC_LOG(LS_INFO) << "Raw socket (" << raw_socket << ") connected successfully";
@@ -188,8 +213,9 @@ void DirectCaller::Disconnect() {
         RTC_LOG(LS_WARNING) << "Failed to send CANCEL message.";
     }
     // Initiate the PeerConnection close process directly via the virtual method
-    RTC_LOG(LS_INFO) << "Calling ShutdownInternal to close PeerConnection. Consider delaying this call if reconnection is desired.";
+    RTC_LOG(LS_INFO) << "Calling ShutdownInternal to close PeerConnection.";
     ShutdownInternal(); 
-    // // Call the base class Disconnect to close the socket and reset PeerConnection
-    // DirectApplication::Disconnect(); // REMOVED - Let ShutdownInternal handle PC, external logic handles socket if needed after Wait
+    // Reset state to allow for a new connection
+    tcp_socket_.reset();
+    RTC_LOG(LS_INFO) << "Caller state reset for new connection.";
 }

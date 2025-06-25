@@ -46,7 +46,7 @@ void DirectPeer::ShutdownInternal() {
     RTC_LOG(LS_INFO) << "Shutting down peer connection (DirectPeer::ShutdownInternal)";
 
     // Perform close and release on the signaling thread
-    signaling_thread()->BlockingCall([this]() {
+    signaling_thread()->PostTask([this]() {
         RTC_DCHECK_RUN_ON(signaling_thread());
         // Release tracks first so their destructors can safely invoke into WebRTC threads
         audio_track_ = nullptr;

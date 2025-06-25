@@ -114,7 +114,9 @@ bool DirectCallerClient::Connect() {
 void DirectCallerClient::Disconnect() {
     // Disconnect inherited DirectCaller resources
     DirectCaller::Disconnect();
-    APP_LOG(AS_INFO) << "DirectCallerClient disconnected";
+    // Reset connection-related state to allow for a new call
+    initialized_ = false;
+    APP_LOG(AS_INFO) << "DirectCallerClient disconnected and state reset for new call";
 }
 
 bool DirectCallerClient::IsConnected() const {
@@ -247,10 +249,21 @@ bool DirectCalleeClient::Initialize() {
 }
 
 bool DirectCalleeClient::StartListening() {
+    // Disallow duplicate starts while already listening
+    if (listening_) {
+        APP_LOG(AS_INFO) << "DirectCalleeClient is already listening – ignoring repeat call.";
+        return true;
+    }
+
     if (!initialized_) {
         APP_LOG(AS_ERROR) << "DirectCalleeClient not initialized";
         return false;
     }
+
+    // Prepare for a fresh run after a previous shutdown.
+    should_quit_.store(false);
+    cleaned_up_.store(false);
+    ResetConnectionClosedEvent();
 
     // Preserve original signaling address before we overwrite opts_.address for the local listener
     std::string signaling_address = opts_.address;  // e.g. "127.0.0.1:3456"
@@ -292,9 +305,30 @@ bool DirectCalleeClient::StartListening() {
 }
 
 void DirectCalleeClient::StopListening() {
-    if (listening_) {
-        this->SignalQuit();
+    // Guard against repeated calls and break potential recursion with SignalQuit().
+    if (!listening_) {
+        return;  // Already stopped.
     }
+
+    listening_ = false;  // Mark as no longer listening *before* further cleanup.
+
+    // Close active TCP sockets so the port becomes immediately reusable.
+    if (tcp_socket_) {
+        tcp_socket_->Close();
+        tcp_socket_.reset();
+    }
+
+    // Close the listening socket (if still open) to free the port.
+    if (listen_socket_) {
+        listen_socket_.reset();  // Destructor closes the underlying OS socket
+    }
+
+    // Disconnect WebRTC and tear down per-connection state without a full cleanup.
+    DirectApplication::Disconnect();
+
+    // Finally, perform the generic quit signalling – this will wake up any waiting loops.
+    DirectPeer::SignalQuit();
+
     APP_LOG(AS_INFO) << "DirectCalleeClient stopped listening";
 }
 
@@ -321,7 +355,12 @@ void DirectCalleeClient::ResetConnectionClosedEvent() {
 }
 
 void DirectCalleeClient::SignalQuit() {
-    StopListening();
+    if (listening_) {
+        StopListening();
+    } else {
+        // We are already not listening – make sure generic shutdown runs.
+        DirectPeer::SignalQuit();
+    }
     APP_LOG(AS_INFO) << "DirectCalleeClient: Quit signal received";
 }
 
@@ -416,9 +455,10 @@ DirectClient::DirectClient(const std::string& user_id)
 DirectClient::~DirectClient() {
     if (ws_client_) {
         ws_client_->disconnect();
+        ws_client_.reset();
     }
     if (network_thread_) {
-        network_thread_->Quit();
+        //network_thread_->Quit();
         network_thread_->Stop();
         network_thread_.reset();
     }
