@@ -528,7 +528,13 @@ bool DirectApplication::CreatePeerConnection() {
       // END OF WARNING
   }
 
-  config.type = webrtc::PeerConnectionInterface::IceTransportsType::kAll;
+  // If a TURN server is configured prefer relay-only candidates to ensure
+  // connectivity across symmetric NATs / fire-walls. Otherwise gather all.
+  if (opts_.turns.size()) {
+    config.type = webrtc::PeerConnectionInterface::IceTransportsType::kRelay;
+  } else {
+    config.type = webrtc::PeerConnectionInterface::IceTransportsType::kAll;
+  }
   // Only set essential ICE configs
   config.bundle_policy = webrtc::PeerConnectionInterface::kBundlePolicyMaxBundle;
   config.rtcp_mux_policy = webrtc::PeerConnectionInterface::kRtcpMuxPolicyRequire;
