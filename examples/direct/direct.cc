@@ -579,7 +579,13 @@ bool DirectApplication::CreatePeerConnection() {
 
               // Determine desired protocol: default UDP, but respect "?transport=tcp" or "?transport=udp"
               cricket::ProtocolType proto = cricket::PROTO_UDP;
-              if (server.uri.find("transport=tcp") != std::string::npos) {
+
+              // 1. Secure URI scheme "turns:" always implies TLS/SSL over TCP
+              if (server.uri.find("turns:") == 0) {
+                  proto = cricket::PROTO_SSLTCP;
+
+              // 2. Explicit transport parameter overrides plain "turn:" scheme
+              } else if (server.uri.find("transport=tcp") != std::string::npos) {
                   proto = cricket::PROTO_TCP;
               } else if (server.uri.find("transport=ssl") != std::string::npos ||
                          server.uri.find("transport=tls") != std::string::npos) {
