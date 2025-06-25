@@ -151,7 +151,7 @@ bool DirectCallee::StartListening() {
 
       #if TARGET_OS_IOS || TARGET_OS_OSX
       // Bonjour advertisement
-      if (!opts_.bonjour_name.empty()) {
+      if (opts_.bonjour && !opts_.bonjour_name.empty()) {
           if (AdvertiseBonjourService(opts_.bonjour_name, local_port_)) {
               RTC_LOG(LS_INFO) << "Bonjour advertised as '" << opts_.bonjour_name << "' on port " << local_port_;
           } else {
@@ -259,27 +259,19 @@ void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
 }
 
 void DirectCallee::OnCancel(rtc::AsyncPacketSocket* socket) {
-  RTC_LOG(LS_INFO) << "Callee socket closed";
   if (socket == tcp_socket_.get()) {
-    // Full teardown and re-init on main thread
-    main_thread()->PostTask([this]() {
-      RTC_LOG(LS_INFO) << "Full teardown initiated via CANCEL";
-      // 1) Cleanup completely (threads, sockets, factories)
-      Cleanup();
-      // 2) Re-initialize threads and WebRTC infrastructure
-      if (!Initialize()) {
-        RTC_LOG(LS_ERROR) << "Re-initialize failed after CANCEL";
-        return;
-      }
-      // 3) Restart listening socket
-      if (!StartListening()) {
-        RTC_LOG(LS_ERROR) << "StartListening failed after CANCEL";
-        return;
-      }
-      // 4) Resume background processing
-      RunOnBackgroundThread();
-      RTC_LOG(LS_INFO) << "Callee fully restarted after CANCEL.";
-    });
+    // Proactively close the TCP connection so that no further packets can
+    // arrive after we have scheduled the session for teardown.  Leaving it
+    // open created a race-condition where the network thread delivered data
+    // to an AsyncTCPSocket whose owning DirectCallee instance had already
+    // been destroyed, resulting in a segmentation fault.
+    if (tcp_socket_) {
+      RTC_LOG(LS_INFO) << "Callee CANCEL → proactively closing TCP socket.";
+      tcp_socket_->Close();
+    }
+    // Just signal the higher-level loop that the current session is done.
+    connection_closed_event_.Set();
+    RTC_LOG(LS_INFO) << "Callee CANCEL → connection_closed_event signalled; session will terminate cleanly.";
   } else {
     RTC_LOG(LS_WARNING) << "Received CANCEL on an unexpected socket.";
   }

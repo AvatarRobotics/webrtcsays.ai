@@ -86,6 +86,12 @@ DirectApplication::DirectApplication(Options opts)
 }
 
 void DirectApplication::Cleanup() {
+  // Ensure this method executes only once.
+  if (cleaned_up_.exchange(true)) {
+    RTC_LOG(LS_INFO) << "Cleanup already performed – skipping.";
+    return;
+  }
+
   // Explicitly close and release PeerConnection via Shutdown before stopping threads
   ShutdownInternal();
 
@@ -103,17 +109,29 @@ void DirectApplication::Cleanup() {
       RTC_LOG(LS_INFO) << "Video sink preserved for potential reuse.";
   }
 
-  // Explicitly release PeerConnectionFactory and ADM references on the worker thread before stopping threads
-  if (worker_thread()->IsCurrent()) {
+  // Explicitly terminate and release the AudioDeviceModule (ADM) – doing this
+  // on the worker thread that owns the ADM prevents race-conditions with the
+  // audio callback threads that would otherwise access freed memory and crash
+  // (observed as segfaults right after "failed to retrieve the playout delay").
+  auto adm_shutdown_lambda = [this]() {
+      if (audio_device_module_) {
+        RTC_LOG(LS_INFO) << "Terminating AudioDeviceModule before destruction";
+        // Best-effort: ignore return value – some back-ends may not implement
+        // Terminate() and simply return an error code.
+        audio_device_module_->Terminate();
+      }
       peer_connection_factory_ = nullptr;
       dependencies_.adm = nullptr;
       audio_device_module_ = nullptr;
+  };
+
+  if (worker_thread() && worker_thread()->IsCurrent()) {
+      adm_shutdown_lambda();
+  } else if (worker_thread()) {
+      worker_thread()->BlockingCall(adm_shutdown_lambda);
   } else {
-      worker_thread()->BlockingCall([this]() {
-          peer_connection_factory_ = nullptr;
-          dependencies_.adm = nullptr;
-          audio_device_module_ = nullptr;
-      });
+      // Fallback: if worker_thread_ is already gone execute directly.
+      adm_shutdown_lambda();
   }
 
   if (rtc::Thread::Current() != main_thread_.get()) {
@@ -266,6 +284,12 @@ void DirectApplication::Run() {
 void DirectApplication::RunOnBackgroundThread() {
   RTC_DCHECK(!rtc::Thread::Current()); // Ensure not on a WebRTC thread yet
 
+  // If Initialize() has not been run yet, we have no main_thread_ to post to.
+  if (!main_thread_) {
+    RTC_LOG(LS_WARNING) << "RunOnBackgroundThread called before Initialize – ignoring.";
+    return;
+  }
+
   // Use main_thread_ instead of creating a new thread to avoid conflicts
   main_thread_->PostTask([this]() {
     while (!should_quit_) {
@@ -293,6 +317,10 @@ bool DirectApplication::Initialize() {
   main_thread_ = rtc::Thread::CreateWithSocketServer();
   main_thread_->socketserver()->SetMessageQueue(main_thread_.get());
   DirectThreadSetName(main_thread(), "Main");
+  if (!main_thread_->Start()) {
+    RTC_LOG(LS_ERROR) << "Failed to start main thread";
+    return false;
+  }
   ws_thread_ = rtc::Thread::Create();
   worker_thread_ = rtc::Thread::Create();
   signaling_thread_ = rtc::Thread::Create();
@@ -422,6 +450,28 @@ bool DirectApplication::CreatePeerConnection() {
     if (audio_device_module_) {
       RTC_LOG(LS_INFO) << "Audio device module created successfully on thread: "
                        << rtc::Thread::Current();
+
+      // Attempt to initialize the ADM.  On head-less Linux servers PulseAudio
+      // often isn't available which causes Init() to fail and WebRTC will
+      // crash later when the voice engine asserts.  Detect this early and
+      // transparently fall back to the dummy (no-audio) implementation so
+      // that signalling and video can still work.
+      int init_res = audio_device_module_->Init();
+      if (init_res != 0) {
+        RTC_LOG(LS_ERROR) << "Audio device module Init failed (" << init_res
+                          << "), switching to DummyAudio layer";
+
+        // Replace with dummy ADM – ignore return value, we tried our best.
+        audio_device_module_ = webrtc::AudioDeviceModule::Create(
+            webrtc::AudioDeviceModule::kDummyAudio,
+            task_queue_factory_ptr);
+        if (audio_device_module_) {
+          audio_device_module_->Init();
+          RTC_LOG(LS_INFO) << "Dummy audio device module created and initialized";
+        } else {
+          RTC_LOG(LS_ERROR) << "Failed to create Dummy audio device module";
+        }
+      }
     } else {
       RTC_LOG(LS_ERROR) << "Failed to create audio device module";
     }
@@ -496,7 +546,13 @@ bool DirectApplication::CreatePeerConnection() {
       // END OF WARNING
   }
 
-  config.type = webrtc::PeerConnectionInterface::IceTransportsType::kAll;
+  // If a TURN server is configured prefer relay-only candidates to ensure
+  // connectivity across symmetric NATs / fire-walls. Otherwise gather all.
+  if (opts_.turns.size()) {
+    config.type = webrtc::PeerConnectionInterface::IceTransportsType::kRelay;
+  } else {
+    config.type = webrtc::PeerConnectionInterface::IceTransportsType::kAll;
+  }
   // Only set essential ICE configs
   config.bundle_policy = webrtc::PeerConnectionInterface::kBundlePolicyMaxBundle;
   config.rtcp_mux_policy = webrtc::PeerConnectionInterface::kRtcpMuxPolicyRequire;
@@ -518,6 +574,10 @@ bool DirectApplication::CreatePeerConnection() {
       iceServer.uri = turnsParams[0];
       iceServer.username = turnsParams[1];
       iceServer.password = turnsParams[2];
+      // Avoid certificate validation failures on minimal Linux images that
+      // lack the full CA bundle by disabling TLS cert checks.  TURN
+      // connections are still authenticated via long-term credentials.
+      iceServer.tls_cert_policy = webrtc::PeerConnectionInterface::kTlsCertPolicyInsecureNoCheck;
       config.servers.push_back(iceServer);
     }
   }
@@ -544,13 +604,31 @@ bool DirectApplication::CreatePeerConnection() {
           if (colon_pos != std::string::npos) {
               cricket::RelayServerConfig turn_config;
               turn_config.credentials = cricket::RelayCredentials(server.username, server.password);
+
+              // Determine desired protocol: default UDP, but respect "?transport=tcp" or "?transport=udp"
+              cricket::ProtocolType proto = cricket::PROTO_UDP;
+
+              // 1. Secure URI scheme "turns:" always implies TLS/SSL over TCP
+              if (server.uri.find("turns:") == 0) {
+                  proto = cricket::PROTO_SSLTCP;
+
+              // 2. Explicit transport parameter overrides plain "turn:" scheme
+              } else if (server.uri.find("transport=tcp") != std::string::npos) {
+                  proto = cricket::PROTO_TCP;
+              } else if (server.uri.find("transport=ssl") != std::string::npos ||
+                         server.uri.find("transport=tls") != std::string::npos) {
+                  proto = cricket::PROTO_SSLTCP;
+              }
+
+              turn_config.tls_cert_policy = cricket::TlsCertPolicy::TLS_CERT_POLICY_INSECURE_NO_CHECK;
+
               turn_config.ports.push_back(cricket::ProtocolAddress(
                   rtc::SocketAddress(
                       host_port.substr(0, colon_pos),
                       atoi(host_port.substr(colon_pos + 1).c_str())),
-                  cricket::PROTO_UDP));
+                  proto));
               turn_servers.push_back(turn_config);
-              RTC_LOG(LS_INFO) << "TURN server parsed: " << host_port << " for URI: " << server.uri;
+              RTC_LOG(LS_INFO) << "TURN server parsed: " << host_port << " proto=" << proto << " for URI: " << server.uri;
           } else {
               RTC_LOG(LS_WARNING) << "Failed to parse TURN server port from URI: " << server.uri;
           }
@@ -734,6 +812,7 @@ void DirectApplication::OnAddTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterfa
         if(!video_sink_) {
           RTC_LOG(LS_INFO) << "Initializing video sink for remote video track...";
           video_sink_ = std::make_unique<webrtc::LlamaVideoRenderer>();
+          ((webrtc::LlamaVideoRenderer*)video_sink_.get())->set_is_llama(opts_.llama);
         }
         
         if (video_sink_) {

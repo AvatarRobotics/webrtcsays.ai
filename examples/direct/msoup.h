@@ -36,6 +36,7 @@
 #include <vector>
 
 #include "direct.h"
+#include "wsock.h"
 
 
 class MediaSoupWrapper {
@@ -51,10 +52,6 @@ class MediaSoupWrapper {
   bool connect(const std::string& host, const std::string& port);
   bool send_http_request(const std::string& path);
   bool send_websocket_frame(const std::string& message);
-  std::vector<std::string> process_websocket_frames();
-  void async_read();
-  void attempt_reconnect();
-  void force_sync_read(int expected_id = -1);
   void start_listening(std::function<void(const std::string&)> callback);
   bool query_room(const std::string& roomId);
   bool join_room();
@@ -80,12 +77,8 @@ class MediaSoupWrapper {
                      const std::string& consumer_id,
                      const Json::Value& rtp_parameters);
 
-  int sockfd;
-  SSL_CTX* ctx;
-  SSL* ssl;
-  std::atomic<bool> running;
-  std::mutex ssl_mutex;
-  std::thread listener_thread;
+  // WebSocket client
+  std::unique_ptr<WebSocketClient> ws_client_;
   Json::Value rtp_capabilities_;
   bool rtp_capabilities_received_ = false;
   std::string host_;
@@ -129,16 +122,9 @@ class MediaSoupWrapper {
   bool use_ssl_ = false;
   std::string target_host_ = "v3demo.mediasoup.org";
   std::string target_port_ = "4443";
-  std::mutex thread_mutex_;
-  std::atomic<bool> running_{false};
   rtc::Thread* network_thread_ = nullptr;
-  std::function<void()> listener_task_;
   bool fully_initialized_ = false;
-  std::string buffer_;
   std::function<void(const std::string&)> message_callback_;
-  std::mutex buffer_mutex_;
-  std::condition_variable data_available_;
-  std::atomic<bool> read_in_progress_{false};
   std::string cert_file_path_;
   std::string key_file_path_;
   int rtp_caps_request_id_ = -1;
@@ -161,12 +147,15 @@ class MediaSoupWrapper {
   std::map<int, std::function<void(const Json::Value&)>> pending_requests_;
   std::mutex pending_requests_mutex_;
 
-  std::string generate_websocket_key();
   std::string generate_peer_id();
+  int LastRequestId(const std::string& method) const;
+
+  // WebSocket utility methods
+  std::string generate_websocket_key();
   std::string base64_encode(const std::string& in);
   void send_ping();
   void send_pong_frame(const std::vector<unsigned char>& ping_payload);
-  int LastRequestId(const std::string& method) const;
+  void attempt_reconnect();
 
   std::map<int, std::string> request_info_map_;
 

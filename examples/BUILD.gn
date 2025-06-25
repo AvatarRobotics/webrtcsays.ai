@@ -388,22 +388,6 @@ if (is_ios) {
       # Conditionally link Whillats and its dependencies
       if (rtc_use_speech_audio_devices) {
         configs += [ "//sdk:whillats_framework_config" ]
-
-        # Conditionally link whisper and llama
-        _whisper_framework_dir = rebase_path("//modules/third_party/whillats/third_party/whisper.cpp/build-apple/whisper.xcframework/ios-arm64", root_build_dir)
-        _llama_framework_dir = rebase_path("//modules/third_party/whillats/third_party/llama.cpp/build-apple/llama.xcframework/ios-arm64", root_build_dir)
-
-        if (!defined(ldflags)) { ldflags = [] }
-        if (!defined(frameworks)) { frameworks = [] }
-
-        ldflags += [
-          "-F" + _whisper_framework_dir,
-          "-F" + _llama_framework_dir,
-        ]
-        frameworks += [
-          "whisper.framework",
-          "llama.framework",
-        ]
       }
     }
 
@@ -924,6 +908,8 @@ if (!build_with_chromium) {
       sources = [
         "direct/direct.h",
         "direct/option.h",
+        "direct/client.h",
+        "direct/wsock.h"
       ]
       outputs = [
         "$target_gen_dir/direct.framework/Headers/{{source_file_part}}",
@@ -961,6 +947,10 @@ if (!build_with_chromium) {
         "direct/option.cc",
         "direct/room.cc",
         "direct/msoup.cc",
+        "direct/client.cc",
+        "direct/wsock.cc",
+        "direct/wsock.h",
+        "direct/client.h",
       ]
 
       # Use the output of the action_foreach target for public headers
@@ -1042,24 +1032,6 @@ if (!build_with_chromium) {
       if (rtc_use_speech_audio_devices) {
         configs += [ "//sdk:whillats_framework_config" ]
       }
-
-      # Conditionally link whisper and llama
-      if (rtc_use_speech_audio_devices) {
-        _whisper_framework_dir = rebase_path("//modules/third_party/whillats/third_party/whisper.cpp/build-apple/whisper.xcframework/ios-arm64", root_build_dir)
-        _llama_framework_dir = rebase_path("//modules/third_party/whillats/third_party/llama.cpp/build-apple/llama.xcframework/ios-arm64", root_build_dir)
-
-        if (!defined(ldflags)) { ldflags = [] }
-        if (!defined(frameworks)) { frameworks = [] }
-
-        ldflags += [
-          "-F" + _whisper_framework_dir,
-          "-F" + _llama_framework_dir,
-        ]
-        frameworks += [
-          "whisper.framework",
-          "llama.framework",
-        ]
-      }
     }
 
   } else {
@@ -1087,6 +1059,10 @@ if (!build_with_chromium) {
         "direct/option.cc",
         "direct/room.cc",
         "direct/msoup.cc",
+        "direct/client.cc",
+        "direct/wsock.cc",
+        "direct/wsock.h",
+        "direct/client.h",
       ]
 
       if (rtc_use_speech_audio_devices) {

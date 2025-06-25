@@ -45,6 +45,7 @@ std::string expandHomePath(const std::string& path) {
             } else { 
                  // Path was just "${HOME}", nothing to append
             }
+            RTC_LOG(LS_INFO) << "Expanded path: " << expanded_path;
             return expanded_path;
         } else {
             RTC_LOG(LS_WARNING) << "HOME environment variable not set, cannot expand path: " << path;
@@ -150,14 +151,17 @@ Options parseOptions(const std::vector<std::string>& args) {
       "   'turns:global.relay.metered.ca:443?transport=tcp,<username>,<password>'\n"
       "  --vpn=<interface_name>             Specify VPN interface name\n" // Added VPN help
       "  --bonjour_name=<name>              Specify bonjour name\n" // Added bonjour name resolution
+      "  --user_name=<name>                 Your user name for registration\n"
+      "  --target_name=<name>               Target user name to call (caller mode)\n"
+      "  --room_name=<name>                 Room name to join (default: room1)\n"
       "  --help                             Show this help message\n\n"
       "Examples (callee called first, encryption is recommended):\n"
       "  direct --config settings.json\n"
       "  direct --config settings.json --mode=callee --no-encryption\n"
-      "  direct --mode=callee :3478 --no-encryption\n"
-      "  direct --mode=callee 192.168.1.100:3478 --encryption --whisper"
+      "  direct --mode=callee --user_name=alice --room_name=meeting1 192.168.88.225:3456 --no-encryption\n"
+      "  direct --mode=callee --user_name=bob --room_name=meeting1 192.168.88.225:3456 --encryption --whisper"
       " --whisper_model=/path/to/model.bin --llama_model=/path/to/llama.gguf\n"
-      "  direct --mode=caller 192.168.1.100:3478 --encryption\n"
+      "  direct --mode=caller --user_name=charlie --target_name=alice --room_name=room101 192.168.88.225:3456 --encryption\n"
       ;
 
   // --- First pass: check for --config --- 
@@ -223,10 +227,12 @@ Options parseOptions(const std::vector<std::string>& args) {
         if (config_json.isMember("webrtc_cert_path") && config_json["webrtc_cert_path"].isString()) {
              RTC_LOG(LS_INFO) << "Config webrtc_cert_path: " << config_json["webrtc_cert_path"].asString(); // Log value
              opts.webrtc_cert_path = expandHomePath(config_json["webrtc_cert_path"].asString());
+             RTC_LOG(LS_INFO) << "Expanded webrtc_cert_path: " << opts.webrtc_cert_path;
         }
         if (config_json.isMember("webrtc_key_path") && config_json["webrtc_key_path"].isString()) {
              RTC_LOG(LS_INFO) << "Config webrtc_key_path: " << config_json["webrtc_key_path"].asString(); // Log value
              opts.webrtc_key_path = expandHomePath(config_json["webrtc_key_path"].asString());
+             RTC_LOG(LS_INFO) << "Expanded webrtc_key_path: " << opts.webrtc_key_path;
         }
         if (config_json.isMember("webrtc_speech_initial_playout_wav") && config_json["webrtc_speech_initial_playout_wav"].isString()) {
              RTC_LOG(LS_INFO) << "Config initial playout_wav: " << config_json["webrtc_speech_initial_playout_wav"].asString(); // Log value
@@ -255,6 +261,18 @@ Options parseOptions(const std::vector<std::string>& args) {
         if (config_json.isMember("bonjour_name") && config_json["bonjour_name"].isString()) {
              RTC_LOG(LS_INFO) << "Config bonjour_name: " << config_json["bonjour_name"].asString();
              opts.bonjour_name = config_json["bonjour_name"].asString();
+        }
+        if (config_json.isMember("user_name") && config_json["user_name"].isString()) {
+             RTC_LOG(LS_INFO) << "Config user_name: " << config_json["user_name"].asString();
+             opts.user_name = config_json["user_name"].asString();
+        }
+        if (config_json.isMember("target_name") && config_json["target_name"].isString()) {
+             RTC_LOG(LS_INFO) << "Config target_name: " << config_json["target_name"].asString();
+             opts.target_name = config_json["target_name"].asString();
+        }
+        if (config_json.isMember("room_name") && config_json["room_name"].isString()) {
+             RTC_LOG(LS_INFO) << "Config room_name: " << config_json["room_name"].asString();
+             opts.room_name = config_json["room_name"].asString();
         }
 
         // Booleans
@@ -344,6 +362,12 @@ Options parseOptions(const std::vector<std::string>& args) {
         opts.vpn = arg.substr(6);
     } else if (arg.find("--bonjour_name=") == 0) {
         opts.bonjour_name = arg.substr(15);
+    } else if (arg.find("--user_name=") == 0) {
+        opts.user_name = arg.substr(12);
+    } else if (arg.find("--target_name=") == 0) {
+        opts.target_name = arg.substr(14);
+    } else if (arg.find("--room_name=") == 0) {
+        opts.room_name = arg.substr(12);
     }
     // Handle flags
     if (arg == "--encryption") {
@@ -369,6 +393,12 @@ Options parseOptions(const std::vector<std::string>& args) {
       opts.video = true;
     } else if (arg == "--no-video") { 
       RTC_LOG(LS_INFO) << "Args set video off";
+      opts.video = false; 
+    } else if (arg == "--bonjour") { 
+      RTC_LOG(LS_INFO) << "Args set bonjour on";
+      opts.video = true;
+    } else if (arg == "--no-bonjour") { 
+      RTC_LOG(LS_INFO) << "Args set bonjour off";
       opts.video = false;
     }
     // Handle address in any position (must not be another known flag/option)
@@ -532,6 +562,8 @@ rtc::scoped_refptr<rtc::RTCCertificate> DirectLoadCertificate(
 // Function to load certificate from environment variables or fall back to
 // CreateCertificate
 DIRECT_API rtc::scoped_refptr<rtc::RTCCertificate> DirectLoadCertificateFromEnv(Options opts) {
+  RTC_LOG(LS_INFO) << "DirectLoadCertificateFromEnv called with cert_path: '" << opts.webrtc_cert_path << "', key_path: '" << opts.webrtc_key_path << "'";
+  
   // Get paths from environment variables
   const char* cert_path = opts.webrtc_cert_path.empty()
                               ? std::getenv("WEBRTC_CERT_PATH")
@@ -539,6 +571,8 @@ DIRECT_API rtc::scoped_refptr<rtc::RTCCertificate> DirectLoadCertificateFromEnv(
   const char* key_path = opts.webrtc_key_path.empty()
                              ? std::getenv("WEBRTC_KEY_PATH")
                              : opts.webrtc_key_path.c_str();
+
+  RTC_LOG(LS_INFO) << "Using cert_path: " << (cert_path ? cert_path : "NULL") << ", key_path: " << (key_path ? key_path : "NULL");
 
   if (cert_path && key_path) {
     RTC_LOG(LS_INFO) << "Loading certificate from " << cert_path << " and "
