@@ -104,7 +104,7 @@
 
 #include "option.h"
 
-//#define LLAMA_NOTIFICATION_ENABLED 0
+#define LLAMA_NOTIFICATION_ENABLED 1
 
 #ifdef WEBRTC_SPEECH_DEVICES
 #include "modules/audio_device/speech/speech_audio_device_factory.h"

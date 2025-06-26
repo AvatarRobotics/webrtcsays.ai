@@ -99,8 +99,8 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  std::unique_ptr<DirectCalleeClient> callee;
-  std::unique_ptr<DirectCallerClient> caller;
+  std::shared_ptr<DirectCalleeClient> callee;
+  std::shared_ptr<DirectCallerClient> caller;
   
   if (opts.mode == "callee" or opts.mode == "both") {
     int session_count = 0;
@@ -109,7 +109,7 @@ int main(int argc, char* argv[]) {
       session_count++;
       fprintf(stderr, "Starting callee session #%d\n", session_count);
       
-      callee = std::make_unique<DirectCalleeClient>(opts);
+      callee = std::make_shared<DirectCalleeClient>(opts);
       
       if (!callee->Initialize()) {
         fprintf(stderr, "failed to initialize callee\n");
@@ -148,8 +148,6 @@ int main(int argc, char* argv[]) {
       if (callee) {
         fprintf(stderr, "Signaling callee quit (session teardown)\n");
         callee->SignalQuit();
-        // Give threads a short grace period to exit cleanly
-        callee->WaitUntilConnectionClosed(500);
       }
       
       callee.reset();
@@ -170,7 +168,7 @@ int main(int argc, char* argv[]) {
       caller_session_count++;
       fprintf(stderr, "Starting caller session #%d\n", caller_session_count);
       
-      caller = std::make_unique<DirectCallerClient>(opts);
+      caller = std::make_shared<DirectCallerClient>(opts);
       
       // Set the target user to call
       if (!opts.target_name.empty()) {

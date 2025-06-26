@@ -368,13 +368,38 @@ void DirectCalleeClient::ResetConnectionClosedEvent() {
 }
 
 void DirectCalleeClient::SignalQuit() {
-    if (listening_) {
-        StopListening();
-    } else {
-        // We are already not listening – make sure generic shutdown runs.
-        DirectPeer::SignalQuit();
-    }
-    APP_LOG(AS_INFO) << "DirectCalleeClient: Quit signal received";
+    // Fire-and-forget cleanup so the main thread can continue immediately.
+    auto self = shared_from_this();
+    std::thread([self]() mutable {
+        APP_LOG(AS_INFO) << "DirectCalleeClient: Async quit starting";
+
+        // Close sockets on the correct (network) thread to avoid race with
+        // rtc::PhysicalSocketServer internals.
+        if (self->tcp_socket_) {
+            auto s = self->tcp_socket_.release();
+            self->network_thread()->PostTask([s]() {
+                s->Close();
+                delete s;
+            });
+        }
+
+        if (self->listen_socket_) {
+            auto ls = std::move(self->listen_socket_);
+            self->network_thread()->PostTask([ls = std::move(ls)]() mutable {
+                ls.reset();
+            });
+        }
+
+        // Heavy WebRTC teardown runs on the signaling thread; no need to wait.
+        self->signaling_thread()->PostTask([self]() {
+            self->DirectApplication::Disconnect();
+        });
+
+        // Signal any WaitUntilConnectionClosed() callers right away.
+        self->connection_closed_event_.Set();
+
+        APP_LOG(AS_INFO) << "DirectCalleeClient: Async quit posted";
+    }).detach();
 }
 
 void DirectCalleeClient::setupWebRTCListener() {
