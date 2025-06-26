@@ -189,10 +189,11 @@ void DirectCaller::OnMessage(rtc::AsyncPacketSocket* socket,
     std::string message(reinterpret_cast<const char*>(data), len);
     RTC_LOG(LS_INFO) << "Caller received: " << message;
 
-    if (message == "WELCOME") {
-       SendMessage("INIT");
+    // Allow for cases where multiple messages arrive concatenated in one TCP chunk.
+    if (message.find("WELCOME") == 0) {
+        SendMessage("INIT");
     } 
-    else if (message == "WAITING") { // Changed from if to else if for clarity
+    else if (message.find("WAITING") == 0) {
         Start();
     } 
     else if (message == "OK") {

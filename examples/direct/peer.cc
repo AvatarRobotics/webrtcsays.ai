@@ -297,20 +297,56 @@ void DirectPeer::SetRemoteDescription(const std::string& sdp) {
                         webrtc::PeerConnectionInterface::kHaveRemoteOffer) {
                     RTC_LOG(LS_INFO) << "Creating answer as callee...";
 
-                    // Add local audio track for callee
+                    // The remote offer already contains an audio m-line.  Re-use that
+                    // transceiver instead of creating an extra one which would cause the
+                    // answer to have more m-lines than the offer and therefore make
+                    // SetLocalDescription fail.
+
                     cricket::AudioOptions audio_options;
                     auto audio_source = peer_connection_factory_->CreateAudioSource(audio_options);
                     RTC_DCHECK(audio_source.get());
-                    audio_track_ = peer_connection_factory_->CreateAudioTrack(std::string("audio_track"), audio_source.get());
-                    RTC_DCHECK(audio_track_.get());
-                    webrtc::RtpTransceiverInit ainit;
-                    ainit.direction = webrtc::RtpTransceiverDirection::kSendRecv;
-                    auto at_result = peer_connection()->AddTransceiver(audio_track_, ainit);
-                    RTC_DCHECK(at_result.ok());
-                    auto atransceiver = at_result.value();
-                    auto adirection_result = atransceiver->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendRecv);
-                    RTC_LOG(LS_INFO) << "Initial audio transceiver direction set for callee, result: " \
-                                     << (adirection_result.ok() ? "success" : "failed");
+
+                    audio_track_ = peer_connection_factory_->CreateAudioTrack("audio_track", audio_source.get());
+                    RTC_DCHECK(audio_track_);
+
+                    bool track_added = false;
+
+                    // Try to attach our track to an existing AUDIO transceiver that came
+                    // from the remote offer.
+                    for (const auto& t : peer_connection()->GetTransceivers()) {
+                        if (t->media_type() == cricket::MEDIA_TYPE_AUDIO) {
+                            // Make sure we will both send and receive.
+                            auto dir_res = t->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendRecv);
+                            RTC_LOG(LS_INFO) << "Setting existing audio transceiver direction → "
+                                             << (dir_res.ok() ? "success" : dir_res.message());
+
+                            auto sender = t->sender();
+                            if (sender && sender->SetTrack(audio_track_.get())) {
+                                RTC_LOG(LS_INFO) << "Attached local audio track to existing transceiver.";
+                                track_added = true;
+                            } else {
+                                RTC_LOG(LS_WARNING) << "Failed to attach track to existing transceiver.";
+                            }
+                            break; // Only need the first AUDIO transceiver
+                        }
+                    }
+
+                    // If there was no suitable transceiver (unlikely) fall back to AddTrack which
+                    // will re-use or create an appropriate transceiver without adding an extra m-line.
+                    if (!track_added) {
+                        auto sender_or = peer_connection()->AddTrack(audio_track_, {"stream0"});
+                        if (sender_or.ok()) {
+                            RTC_LOG(LS_INFO) << "Audio track added via AddTrack fallback.";
+                            track_added = true;
+                        } else {
+                            RTC_LOG(LS_ERROR) << "Failed to add audio track: " << sender_or.error().message();
+                        }
+                    }
+
+                    if (!track_added) {
+                        RTC_LOG(LS_ERROR) << "Could not attach audio track – aborting answer creation.";
+                        return;
+                    }
 
                     // Create a video track source for the callee if video is enabled.
                     if (opts_.video) {

@@ -229,8 +229,9 @@ bool DirectCallerClient::RequestUserList() {
 
 DirectCalleeClient::DirectCalleeClient(const Options& opts)
     : DirectCallee(opts), initialized_(false), listening_(false) {
-    // Use port 8888 for WebRTC listener unless explicitly provided in opts_.address
-    local_port_ = 8888;
+    // Let the OS pick an available port (0) so each new session is guaranteed
+    // to bind successfully even if the previous one is still in TIME_WAIT.
+    local_port_ = 0;
     signaling_client_ = std::make_unique<DirectClient>(opts.user_name);
 }
 
@@ -286,17 +287,29 @@ bool DirectCalleeClient::StartListening() {
     // But don't fail if signaling server is unavailable
     std::string server_host; int server_port_int = 0;
     ParseIpAndPort(signaling_address, server_host, server_port_int);
-    if (!signaling_client_->connectToSignalingServer(server_host, std::to_string(server_port_int))) {
-        APP_LOG(AS_WARNING) << "Failed to connect to signaling server, but WebRTC listener is still active";
-        APP_LOG(AS_INFO) << "DirectCalleeClient can still receive direct WebRTC calls on port " << local_port_;
-    } else {
-        // Register with room as callee
-        signaling_client_->registerWithRoom(opts_.room_name);
-        
-        // Publish our listening address to the signaling server
-        publishAddressToSignalingServer();
-        APP_LOG(AS_INFO) << "DirectCalleeClient registered with signaling server";
-    }
+
+    auto try_register = [this, server_host, server_port_int]() {
+        const int kMaxAttempts = 30; // ~30 seconds with 1-s spacing
+        int attempt = 0;
+        while (!this->should_quit_.load() && attempt < kMaxAttempts) {
+            if (signaling_client_->connectToSignalingServer(server_host, std::to_string(server_port_int))) {
+                APP_LOG(AS_INFO) << "Connected to signaling server on attempt " << (attempt + 1);
+                signaling_client_->registerWithRoom(opts_.room_name);
+                publishAddressToSignalingServer();
+                APP_LOG(AS_INFO) << "DirectCalleeClient registered with signaling server";
+                return; // success
+            }
+            ++attempt;
+            APP_LOG(AS_WARNING) << "Attempt " << attempt << " to connect to signaling server failed – retrying in 1 s";
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+        if (!this->should_quit_.load()) {
+            APP_LOG(AS_ERROR) << "Unable to connect to signaling server after " << kMaxAttempts << " attempts; callee will still accept direct connections on port " << local_port_;
+        }
+    };
+
+    // Run the registration attempts on a detached std::thread so we don't block StartListening().
+    std::thread(try_register).detach();
     
     listening_ = true;
     APP_LOG(AS_INFO) << "DirectCalleeClient listening for calls in room: " << opts_.room_name;

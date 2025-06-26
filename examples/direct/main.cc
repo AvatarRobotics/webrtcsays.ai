@@ -105,6 +105,7 @@ int main(int argc, char* argv[]) {
   if (opts.mode == "callee" or opts.mode == "both") {
     int session_count = 0;
     while (!g_shutdown) {
+      fprintf(stderr, "Callee loop entered, g_shutdown=%d\n", g_shutdown);
       session_count++;
       fprintf(stderr, "Starting callee session #%d\n", session_count);
       

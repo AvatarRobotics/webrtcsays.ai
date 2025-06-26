@@ -85,6 +85,9 @@ private:
     std::atomic<bool> connected_;
     std::atomic<bool> read_in_progress_;
 
+    // If set to false (e.g., after disconnect()), no further reconnect attempts will be made.
+    std::atomic<bool> allow_reconnect_;
+
     // Configuration
     Config config_;
     rtc::Thread* network_thread_;

@@ -253,8 +253,8 @@ void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
   RTC_LOG(LS_INFO) << "Callee received: " << bufLog << " from "
                    << remote_addr.ToString();
 
-  // Match known commands via length and memcmp
-  if (len == 5 && memcmp(data, "HELLO", 5) == 0) {
+  // Use prefix match to be tolerant of combined packets
+  if (len >= 5 && memcmp(data, "HELLO", 5) == 0) {
     SendMessage("WELCOME");
   } else if (len == 3 && memcmp(data, "BYE", 3) == 0) {
     SendMessage("OK");
@@ -273,26 +273,34 @@ void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
 }
 
 void DirectCallee::OnCancel(rtc::AsyncPacketSocket* socket) {
-  if (socket == tcp_socket_.get()) {
-    // Proactively close the TCP connection so that no further packets can
-    // arrive after we have scheduled the session for teardown.  Leaving it
-    // open created a race-condition where the network thread delivered data
-    // to an AsyncTCPSocket whose owning DirectCallee instance had already
-    // been destroyed, resulting in a segmentation fault.
-    if (tcp_socket_) {
-      RTC_LOG(LS_INFO) << "Callee CANCEL → proactively closing TCP socket.";
-      tcp_socket_->Close();
-    }
-    // PeerConnection teardown but listener remains active for next call.
-    ShutdownInternal();
-    // Reset socket to allow new connections
-    tcp_socket_.reset();
-    RTC_LOG(LS_INFO) << "Callee session cleaned up; listener remains active for next connection.";
-  } else {
+  if (socket != tcp_socket_.get()) {
     RTC_LOG(LS_WARNING) << "Received CANCEL on an unexpected socket.";
+    return;
   }
+
+  // Acknowledge the CANCEL so the caller proceeds to tear-down cleanly.
+  SendMessage("OK");
+
+  // Close and release the current client socket. Do it on the main thread to
+  // avoid blocking the network thread that delivered the packet.
+  auto old_socket = std::move(tcp_socket_);
+  main_thread()->PostTask([s = std::move(old_socket)]() mutable {
+    // unique_ptr s will be destroyed here when the task runs.
+  });
+
+  // Signal the outer control loop that this session is over; it will create a
+  // brand-new DirectCalleeClient which will in turn re-register with the
+  // signalling server.
+  connection_closed_event_.Set();
 }
 
 void DirectCallee::OnClose(rtc::AsyncPacketSocket* socket) {
   RTC_LOG(LS_INFO) << "Callee socket closed";
+}
+
+bool DirectCallee::SendMessage(const std::string& message) {
+  RTC_LOG(LS_INFO) << "Callee received: " << message;
+  APP_LOG(AS_INFO) << "WebSocket SEND: " << message;
+  // Implementation of SendMessage method
+  return DirectPeer::SendMessage(message);
 }

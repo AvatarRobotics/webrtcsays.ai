@@ -436,6 +436,7 @@ class DIRECT_API DirectCallee : public DirectPeer, public sigslot::has_slots<> {
                  const rtc::SocketAddress& remote_addr);
   virtual void OnClose(rtc::AsyncPacketSocket* socket) override;
   void OnCancel(rtc::AsyncPacketSocket* socket);
+  bool SendMessage(const std::string& message) override;
 
   // Callee does not initiate connection, overrides base class
   bool Connect() { return false; }
