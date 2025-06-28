@@ -337,7 +337,7 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
   std::vector<rtc::Socket*> tracked_sockets_;
 
   // Set video capturer from Objective-C
-#if LLAMA_NOTIFICATION_ENABLED
+#ifdef LLAMA_NOTIFICATION_ENABLED
   static WhillatsLlama* llama_;
   WhillatsSetResponseCallback llamaCallback_;
 #endif
@@ -436,6 +436,7 @@ class DIRECT_API DirectCallee : public DirectPeer, public sigslot::has_slots<> {
                  const rtc::SocketAddress& remote_addr);
   virtual void OnClose(rtc::AsyncPacketSocket* socket) override;
   void OnCancel(rtc::AsyncPacketSocket* socket);
+  bool SendMessage(const std::string& message) override;
 
   // Callee does not initiate connection, overrides base class
   bool Connect() { return false; }

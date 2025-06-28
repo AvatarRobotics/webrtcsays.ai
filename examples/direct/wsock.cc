@@ -23,6 +23,7 @@ WebSocketClient::WebSocketClient()
       running_(false),
       connected_(false),
       read_in_progress_(false),
+      allow_reconnect_(true),
       network_thread_(nullptr) {
   // Initialize OpenSSL
   SSL_library_init();
@@ -67,7 +68,16 @@ bool WebSocketClient::connect(const Config& config) {
 void WebSocketClient::disconnect() {
   running_ = false;
   connected_ = false;
+  allow_reconnect_ = false;
+  message_callback_ = nullptr;
   stop_listening();
+
+  // Wait until any in-flight async_read finishes so no callbacks can fire on a
+  // partially-destroyed object.  This is a lightweight spin-wait because
+  // async_read completes quickly once running_ is false.
+  while (read_in_progress_.load()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
 }
 
 bool WebSocketClient::is_connected() const {
@@ -914,6 +924,10 @@ void WebSocketClient::force_sync_read(int timeout_ms) {
 }
 
 void WebSocketClient::attempt_reconnect() {
+  if (!allow_reconnect_) {
+    APP_LOG(AS_INFO) << "WebSocketClient: Reconnect aborted – not allowed after disconnect.";
+    return;
+  }
   APP_LOG(AS_INFO) << "WebSocketClient: Attempting to reconnect";
   cleanup_connection();
   

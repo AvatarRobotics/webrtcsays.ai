@@ -22,6 +22,7 @@
 
 #include <json/json.h> // Use jsoncpp header
 
+#include "direct.h"
 #include "option.h"
 
 // Function to parse IP address and port from a string in the format "IP:PORT"

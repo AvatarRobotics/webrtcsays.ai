@@ -95,18 +95,45 @@ void DirectApplication::Cleanup() {
   // Explicitly close and release PeerConnection via Shutdown before stopping threads
   ShutdownInternal();
 
+#ifdef WEBRTC_SPEECH_DEVICES
+#if LLAMA_NOTIFICATION_ENABLED
+  if (opts_.llama && llama_) {
+    llama_->stop();
+    llama_ = nullptr;
+  } 
+#endif
+#endif
+
   // Remove sink before closing the connection - handle both local and remote tracks
   if (video_sink_) {
-      if (video_track_) {
-          RTC_LOG(LS_INFO) << "Removing video sink from local track.";
-          video_track_->RemoveSink(video_sink_.get());
+      auto remove_sinks_lambda = [this]() {
+          if (video_sink_) {
+              if (video_track_) {
+                  RTC_LOG(LS_INFO) << "Removing video sink from local track (Cleanup).";
+                  video_track_->RemoveSink(video_sink_.get());
+              }
+              if (remote_video_track_) {
+                  RTC_LOG(LS_INFO) << "Removing video sink from remote track (Cleanup).";
+                  remote_video_track_->RemoveSink(video_sink_.get());
+              }
+          }
+      };
+
+      // Ensure we run on signaling thread.
+      if (signaling_thread_ && rtc::Thread::Current() != signaling_thread_.get()) {
+          signaling_thread_->BlockingCall(remove_sinks_lambda);
+      } else {
+          remove_sinks_lambda();
+          // Now destroy the sink to ensure no pending callbacks after teardown.
+          video_sink_.reset();
+          RTC_LOG(LS_INFO) << "Video sink destroyed after detaching.";
       }
-      if (remote_video_track_) {
-          RTC_LOG(LS_INFO) << "Removing video sink from remote track.";
-          remote_video_track_->RemoveSink(video_sink_.get());
-      }
-      // Don't null the video_sink_ here to allow reuse in next connection
-      RTC_LOG(LS_INFO) << "Video sink preserved for potential reuse.";
+  }
+
+  // Release video source to avoid callbacks after cleanup
+  if (video_source_) {
+      video_source_ = nullptr;
+      RTC_LOG(LS_INFO) << "Video source released after cleanup.";
   }
 
   // Explicitly terminate and release the AudioDeviceModule (ADM) – doing this
@@ -139,13 +166,27 @@ void DirectApplication::Cleanup() {
     return;
   }
 
+  // --- phase 1: close sockets while network thread is alive ------------
+  network_thread_->BlockingCall([this]() {
+      RTC_LOG(LS_INFO) << "Closing tracked sockets (phase-1)";
+      for (auto* s : tracked_sockets_) {
+          if (s) s->Close();         // triggers SSL/TCP shutdown sequence
+      }
+      tracked_sockets_.clear();
+  });
+  //  no Quit() yet -------------------------------------------------------
+
+  // --- phase 2: wait until the network queue is empty -------------------
+  rtc::Event drained;
+  network_thread_->PostTask([&drained]() { drained.Set(); });
+  drained.Wait(webrtc::TimeDelta::Seconds(5));  // give it up to 5 s
+
+  // Only now is it safe to finish the thread.
+  network_thread_->Quit();
+  network_thread_->Stop();
+  network_thread_.reset();
+
   // Stop threads in reverse order with a small delay to ensure graceful shutdown
-  if (network_thread_) {
-    network_thread_->Quit();
-    network_thread_->Stop();
-    rtc::Thread::SleepMs(50); // Small delay (50ms) to allow pending operations to complete
-    network_thread_.reset();
-  }
   if (worker_thread_) {
     worker_thread_->Quit();
     worker_thread_->Stop();
@@ -171,19 +212,6 @@ void DirectApplication::Cleanup() {
   // Clear remaining members
   socket_factory_.reset();
   
-  // Close all tracked sockets to ensure they are removed from PhysicalSocketServer
-  RTC_LOG(LS_INFO) << "Closing tracked sockets";
-  for (auto* socket : tracked_sockets_) {
-    RTC_LOG(LS_INFO) << "Closing socket";
-    if (socket) {
-      RTC_LOG(LS_INFO) << "Socket is not null, closing";
-      socket->Close();
-    }
-  }
-  tracked_sockets_.clear();
-  // Add a longer delay to ensure any pending socket operations are completed
-  rtc::Thread::SleepMs(500); // Longer delay (500ms) to allow pending operations to complete
-
   if(pss_) {
     pss_->WakeUp();
     delete pss_;
@@ -202,15 +230,23 @@ void DirectApplication::Disconnect() {
   // Close active connections and reset connection state without destroying core resources
   RTC_LOG(LS_INFO) << "Disconnecting active connections";
 
-  // Log if video stream is being stopped during disconnect
+  // If a local video track exists ensure we detach the sink and release it on the signaling thread.
   if (video_track_) {
-    RTC_LOG(LS_WARNING) << "Disconnecting: Video track exists, video transmission may stop. Track enabled: " << (video_track_->enabled() ? "true" : "false");
-    // Safeguard: Prevent stopping video send if not necessary
-    if (video_track_->enabled() && video_source_ && video_source_->state() == webrtc::MediaSourceInterface::kLive) {
-      RTC_LOG(LS_WARNING) << "Disconnecting: Video source is live and track enabled. Attempting to preserve video send state for reconnection.";
-      // Note: We can't directly prevent WebRTC internal calls to SetVideoSend with null,
-      // but we log to track if this is the point of stopping.
+    RTC_LOG(LS_WARNING) << "Disconnecting: Video track exists, video transmission may stop. Track enabled: "
+                        << (video_track_->enabled() ? "true" : "false");
+
+    auto release_local_track = [this]() {
+      // No sink was attached to the local track; just release the reference.
+      video_track_ = nullptr;
+    };
+
+    if (signaling_thread_ && rtc::Thread::Current() != signaling_thread_.get()) {
+      signaling_thread_->BlockingCall(release_local_track);
+    } else {
+      release_local_track();
     }
+
+    // Safeguard: If source is live we intend to reuse it; that's fine.
   }
 
   // Close all tracked sockets to ensure they are removed from PhysicalSocketServer
@@ -226,16 +262,40 @@ void DirectApplication::Disconnect() {
   // Reset connection-specific state
   if (peer_connection_) {
     RTC_LOG(LS_INFO) << "Closing peer connection, video transmission will stop if active.";
-    peer_connection_->Close();
-    peer_connection_ = nullptr;
+
+    // Close() must be called on signaling thread, then we need to release the
+    // reference on the same thread so that the destructor executes where
+    // WebRTC expects it.
+
+    signaling_thread()->BlockingCall([this]() {
+      if (peer_connection_) {
+        peer_connection_->Close();
+        peer_connection_ = nullptr;  // release on signaling thread
+        RTC_LOG(LS_INFO) << "Peer connection closed and released on signaling thread (Disconnect).";
+      }
+    });
   }
   
   // Preserve video pipeline components for reconnection but clear references
   if (remote_video_track_) {
     RTC_LOG(LS_INFO) << "Clearing remote video track reference for reconnection.";
+
     if (video_sink_) {
-      remote_video_track_->RemoveSink(video_sink_.get());
+      auto remove_sink_lambda = [this]() {
+        if (remote_video_track_ && video_sink_) {
+          RTC_LOG(LS_INFO) << "Removing video sink from remote track on signaling thread.";
+          remote_video_track_->RemoveSink(video_sink_.get());
+        }
+      };
+
+      // Ensure we are on the signaling thread for WebRTC track operations.
+      if (rtc::Thread::Current() != signaling_thread()) {
+        signaling_thread()->BlockingCall(remove_sink_lambda);
+      } else {
+        remove_sink_lambda();
+      }
     }
+
     remote_video_track_ = nullptr;
   }
   // peer_connection_factory_ = nullptr; // Keep factory alive for reconnection

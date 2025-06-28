@@ -114,7 +114,9 @@ bool DirectCallerClient::Connect() {
 void DirectCallerClient::Disconnect() {
     // Disconnect inherited DirectCaller resources
     DirectCaller::Disconnect();
-    APP_LOG(AS_INFO) << "DirectCallerClient disconnected";
+    // Reset connection-related state to allow for a new call
+    initialized_ = false;
+    APP_LOG(AS_INFO) << "DirectCallerClient disconnected and state reset for new call";
 }
 
 bool DirectCallerClient::IsConnected() const {
@@ -227,8 +229,9 @@ bool DirectCallerClient::RequestUserList() {
 
 DirectCalleeClient::DirectCalleeClient(const Options& opts)
     : DirectCallee(opts), initialized_(false), listening_(false) {
-    // Use port 8888 for WebRTC listener unless explicitly provided in opts_.address
-    local_port_ = 8888;
+    // Let the OS pick an available port (0) so each new session is guaranteed
+    // to bind successfully even if the previous one is still in TIME_WAIT.
+    local_port_ = 0;
     signaling_client_ = std::make_unique<DirectClient>(opts.user_name);
 }
 
@@ -247,10 +250,21 @@ bool DirectCalleeClient::Initialize() {
 }
 
 bool DirectCalleeClient::StartListening() {
+    // Disallow duplicate starts while already listening
+    if (listening_) {
+        APP_LOG(AS_INFO) << "DirectCalleeClient is already listening – ignoring repeat call.";
+        return true;
+    }
+
     if (!initialized_) {
         APP_LOG(AS_ERROR) << "DirectCalleeClient not initialized";
         return false;
     }
+
+    // Prepare for a fresh run after a previous shutdown.
+    should_quit_.store(false);
+    cleaned_up_.store(false);
+    ResetConnectionClosedEvent();
 
     // Preserve original signaling address before we overwrite opts_.address for the local listener
     std::string signaling_address = opts_.address;  // e.g. "127.0.0.1:3456"
@@ -273,17 +287,29 @@ bool DirectCalleeClient::StartListening() {
     // But don't fail if signaling server is unavailable
     std::string server_host; int server_port_int = 0;
     ParseIpAndPort(signaling_address, server_host, server_port_int);
-    if (!signaling_client_->connectToSignalingServer(server_host, std::to_string(server_port_int))) {
-        APP_LOG(AS_WARNING) << "Failed to connect to signaling server, but WebRTC listener is still active";
-        APP_LOG(AS_INFO) << "DirectCalleeClient can still receive direct WebRTC calls on port " << local_port_;
-    } else {
-        // Register with room as callee
-        signaling_client_->registerWithRoom(opts_.room_name);
-        
-        // Publish our listening address to the signaling server
-        publishAddressToSignalingServer();
-        APP_LOG(AS_INFO) << "DirectCalleeClient registered with signaling server";
-    }
+
+    auto try_register = [this, server_host, server_port_int]() {
+        const int kMaxAttempts = 30; // ~30 seconds with 1-s spacing
+        int attempt = 0;
+        while (!this->should_quit_.load() && attempt < kMaxAttempts) {
+            if (signaling_client_->connectToSignalingServer(server_host, std::to_string(server_port_int))) {
+                APP_LOG(AS_INFO) << "Connected to signaling server on attempt " << (attempt + 1);
+                signaling_client_->registerWithRoom(opts_.room_name);
+                publishAddressToSignalingServer();
+                APP_LOG(AS_INFO) << "DirectCalleeClient registered with signaling server";
+                return; // success
+            }
+            ++attempt;
+            APP_LOG(AS_WARNING) << "Attempt " << attempt << " to connect to signaling server failed – retrying in 1 s";
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+        if (!this->should_quit_.load()) {
+            APP_LOG(AS_ERROR) << "Unable to connect to signaling server after " << kMaxAttempts << " attempts; callee will still accept direct connections on port " << local_port_;
+        }
+    };
+
+    // Run the registration attempts on a detached std::thread so we don't block StartListening().
+    std::thread(try_register).detach();
     
     listening_ = true;
     APP_LOG(AS_INFO) << "DirectCalleeClient listening for calls in room: " << opts_.room_name;
@@ -292,9 +318,30 @@ bool DirectCalleeClient::StartListening() {
 }
 
 void DirectCalleeClient::StopListening() {
-    if (listening_) {
-        this->SignalQuit();
+    // Guard against repeated calls and break potential recursion with SignalQuit().
+    if (!listening_) {
+        return;  // Already stopped.
     }
+
+    listening_ = false;  // Mark as no longer listening *before* further cleanup.
+
+    // Close active TCP sockets so the port becomes immediately reusable.
+    if (tcp_socket_) {
+        tcp_socket_->Close();
+        tcp_socket_.reset();
+    }
+
+    // Close the listening socket (if still open) to free the port.
+    if (listen_socket_) {
+        listen_socket_.reset();  // Destructor closes the underlying OS socket
+    }
+
+    // Disconnect WebRTC and tear down per-connection state without a full cleanup.
+    DirectApplication::Disconnect();
+
+    // Finally, perform the generic quit signalling – this will wake up any waiting loops.
+    DirectPeer::SignalQuit();
+
     APP_LOG(AS_INFO) << "DirectCalleeClient stopped listening";
 }
 
@@ -321,8 +368,38 @@ void DirectCalleeClient::ResetConnectionClosedEvent() {
 }
 
 void DirectCalleeClient::SignalQuit() {
-    StopListening();
-    APP_LOG(AS_INFO) << "DirectCalleeClient: Quit signal received";
+    // Fire-and-forget cleanup so the main thread can continue immediately.
+    auto self = shared_from_this();
+    std::thread([self]() mutable {
+        APP_LOG(AS_INFO) << "DirectCalleeClient: Async quit starting";
+
+        // Close sockets on the correct (network) thread to avoid race with
+        // rtc::PhysicalSocketServer internals.
+        if (self->tcp_socket_) {
+            auto s = self->tcp_socket_.release();
+            self->network_thread()->PostTask([s]() {
+                s->Close();
+                delete s;
+            });
+        }
+
+        if (self->listen_socket_) {
+            auto ls = std::move(self->listen_socket_);
+            self->network_thread()->PostTask([ls = std::move(ls)]() mutable {
+                ls.reset();
+            });
+        }
+
+        // Heavy WebRTC teardown runs on the signaling thread; no need to wait.
+        self->signaling_thread()->PostTask([self]() {
+            self->DirectApplication::Disconnect();
+        });
+
+        // Signal any WaitUntilConnectionClosed() callers right away.
+        self->connection_closed_event_.Set();
+
+        APP_LOG(AS_INFO) << "DirectCalleeClient: Async quit posted";
+    }).detach();
 }
 
 void DirectCalleeClient::setupWebRTCListener() {
@@ -345,12 +422,42 @@ void DirectCalleeClient::setupWebRTCListener() {
 }
 
 void DirectCalleeClient::publishAddressToSignalingServer() {
-    // In a real implementation, we would publish our listening address to the signaling server
-    // so that callers can resolve our name to our IP:port
-    APP_LOG(AS_INFO) << "DirectCalleeClient: Publishing address to signaling server (user: " << opts_.user_name << ", port: " << local_port_ << ")";
-    
-    // For now, we just log that we're available
-    // The signaling server would need to support an "REGISTER_ADDRESS" message
+    if (!signaling_client_ || !signaling_client_->isConnected()) {
+        APP_LOG(AS_WARNING) << "Cannot publish address – signaling client not connected";
+        return;
+    }
+
+    // Discover first non-loopback IPv4 address (very lightweight)
+    std::string lan_ip = "127.0.0.1";
+#ifdef __APPLE__
+    char hostname[256];
+    if (gethostname(hostname, sizeof(hostname)) == 0) {
+        struct addrinfo hints = {};
+        hints.ai_family = AF_INET; // IPv4 only
+        hints.ai_socktype = SOCK_STREAM;
+        struct addrinfo* info = nullptr;
+        if (getaddrinfo(hostname, nullptr, &hints, &info) == 0) {
+            for (auto* p = info; p; p = p->ai_next) {
+                char ip[INET_ADDRSTRLEN];
+                void* addr_ptr = &((struct sockaddr_in*)p->ai_addr)->sin_addr;
+                if (inet_ntop(AF_INET, addr_ptr, ip, sizeof(ip))) {
+                    std::string candidate(ip);
+                    if (candidate != "127.0.0.1") {
+                        lan_ip = candidate;
+                        break;
+                    }
+                }
+            }
+            freeaddrinfo(info);
+        }
+    }
+#endif
+
+    if (signaling_client_->sendAddress(opts_.user_name, lan_ip, local_port_)) {
+        APP_LOG(AS_INFO) << "Published LAN address to signaling server: " << lan_ip << ":" << local_port_;
+    } else {
+        APP_LOG(AS_WARNING) << "Failed to publish ADDRESS message to signaling server";
+    }
 }
 
 void DirectCalleeClient::onIncomingCall(const std::string& peer_id, const std::string& sdp) {
@@ -386,9 +493,10 @@ DirectClient::DirectClient(const std::string& user_id)
 DirectClient::~DirectClient() {
     if (ws_client_) {
         ws_client_->disconnect();
+        ws_client_.reset();
     }
     if (network_thread_) {
-        network_thread_->Quit();
+        //network_thread_->Quit();
         network_thread_->Stop();
         network_thread_.reset();
     }
@@ -437,6 +545,45 @@ bool DirectClient::sendHelloToUser(const std::string& target_user_id) {
 bool DirectClient::requestUserList() {
     if (!connected_) return false;
     return ws_client_->send_message("USER_LIST");
+}
+
+bool DirectClient::sendOffer(const std::string& target_peer_id, const std::string& sdp) {
+    if (!connected_) return false;
+    std::string msg = "OFFER:" + user_id_ + ":" + sdp;
+    return ws_client_->send_message(msg);
+}
+
+bool DirectClient::sendAnswer(const std::string& target_peer_id, const std::string& sdp) {
+    if (!connected_) return false;
+    std::string msg = "ANSWER:" + user_id_ + ":" + sdp;
+    return ws_client_->send_message(msg);
+}
+
+bool DirectClient::sendIceCandidate(const std::string& target_peer_id, const std::string& candidate) {
+    if (!connected_) return false;
+    std::string msg = "ICE:" + user_id_ + ":" + candidate;
+    return ws_client_->send_message(msg);
+}
+
+bool DirectClient::sendInit() {
+    if (!connected_) return false;
+    return ws_client_->send_message("INIT");
+}
+
+bool DirectClient::sendBye() {
+    if (!connected_) return false;
+    return ws_client_->send_message("BYE");
+}
+
+bool DirectClient::sendCancel() {
+    if (!connected_) return false;
+    return ws_client_->send_message("CANCEL");
+}
+
+bool DirectClient::sendAddress(const std::string& user_id, const std::string& ip, int port) {
+    if (!connected_) return false;
+    std::string msg = "ADDRESS:" + user_id + ":" + ip + ":" + std::to_string(port);
+    return ws_client_->send_message(msg);
 }
 
 // Stub methods (full parsing logic preserved elsewhere)
@@ -497,6 +644,56 @@ void DirectClient::handleProtocolMessage(const std::string& message) {
         APP_LOG(AS_INFO) << "DirectClient received USER_LIST with " << users.size() << " users";
         if (user_list_received_callback_) {
             user_list_received_callback_(users);
+        }
+    } else if (message.rfind("OFFER:", 0) == 0) {
+        // Format: OFFER:peer_id:sdp
+        size_t first_colon = message.find(':'); // after OFFER
+        size_t second_colon = message.find(':', first_colon + 1);
+        if (second_colon != std::string::npos) {
+            std::string peerId = message.substr(first_colon + 1, second_colon - first_colon - 1);
+            std::string sdp = message.substr(second_colon + 1);
+            if (peerId == user_id_) {
+                return; // Ignore our own offer broadcast
+            }
+            APP_LOG(AS_INFO) << "DirectClient received OFFER from " << peerId;
+            if (offer_received_callback_) {
+                offer_received_callback_(peerId, sdp);
+            }
+        } else {
+            APP_LOG(AS_WARNING) << "Malformed OFFER message: " << message;
+        }
+    } else if (message.rfind("ANSWER:", 0) == 0) {
+        // Format: ANSWER:peer_id:sdp
+        size_t first_colon = message.find(':');
+        size_t second_colon = message.find(':', first_colon + 1);
+        if (second_colon != std::string::npos) {
+            std::string peerId = message.substr(first_colon + 1, second_colon - first_colon - 1);
+            std::string sdp = message.substr(second_colon + 1);
+            if (peerId == user_id_) {
+                return; // Ignore our own answer broadcast
+            }
+            APP_LOG(AS_INFO) << "DirectClient received ANSWER from " << peerId;
+            if (answer_received_callback_) {
+                answer_received_callback_(peerId, sdp);
+            }
+        } else {
+            APP_LOG(AS_WARNING) << "Malformed ANSWER message: " << message;
+        }
+    } else if (message.rfind("ICE:", 0) == 0) {
+        // Format: ICE:peer_id:candidate
+        size_t first_colon = message.find(':');
+        size_t second_colon = message.find(':', first_colon + 1);
+        if (second_colon != std::string::npos) {
+            std::string peerId = message.substr(first_colon + 1, second_colon - first_colon - 1);
+            std::string candidate = message.substr(second_colon + 1);
+            if (peerId == user_id_) {
+                return; // Ignore our own ICE broadcast
+            }
+            if (ice_candidate_received_callback_) {
+                ice_candidate_received_callback_(peerId, candidate);
+            }
+        } else {
+            APP_LOG(AS_WARNING) << "Malformed ICE message: " << message;
         }
     }
 }

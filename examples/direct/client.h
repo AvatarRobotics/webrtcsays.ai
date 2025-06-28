@@ -67,6 +67,7 @@ public:
     bool sendOffer(const std::string& target_peer_id, const std::string& sdp);
     bool sendAnswer(const std::string& target_peer_id, const std::string& sdp);
     bool sendIceCandidate(const std::string& target_peer_id, const std::string& candidate);
+    bool sendAddress(const std::string& user_id, const std::string& ip, int port);
     bool sendInit();
     bool sendBye();
     bool sendCancel();
@@ -146,7 +147,7 @@ private:
 };
 
 // DirectCalleeClient - Accepts incoming calls by name using signaling server  
-class EXPORT_API DirectCalleeClient : public DirectCallee {
+class EXPORT_API DirectCalleeClient : public DirectCallee, public std::enable_shared_from_this<DirectCalleeClient> {
 protected:
     std::unique_ptr<DirectClient> signaling_client_;  // For signaling server communication
 
