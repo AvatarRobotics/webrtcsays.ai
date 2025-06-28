@@ -275,6 +275,10 @@ Options parseOptions(const std::vector<std::string>& args) {
              RTC_LOG(LS_INFO) << "Config room_name: " << config_json["room_name"].asString();
              opts.room_name = config_json["room_name"].asString();
         }
+        if (config_json.isMember("language") && config_json["language"].isString()) {
+             RTC_LOG(LS_INFO) << "Config language: " << config_json["language"].asString();
+             opts.language = config_json["language"].asString();
+        }
 
         // Booleans
         if (config_json.isMember("encryption") && config_json["encryption"].isBool()) {

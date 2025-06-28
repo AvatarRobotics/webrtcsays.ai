@@ -96,6 +96,11 @@ void SpeechAudioDeviceFactory::SpeakText(const std::string& text, const std::str
     _ttsDevice->queueText(text.c_str(), language.c_str());
 }
 
+void SpeechAudioDeviceFactory::AskLlama(const std::string& text, const std::string& language) { 
+  if(_llamaDevice)
+    _llamaDevice->askLlama(text.c_str());
+}
+
 void SpeechAudioDeviceFactory::SetWhisperModelFilename(absl::string_view whisper_model_filename) {
   _whisperModelFilename = whisper_model_filename;
 }

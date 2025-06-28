@@ -50,9 +50,12 @@ class SpeechAudioDeviceFactory {
     return _whisperDevice ? _whisperDevice->getLanguage() : "en"; }
   static void NotifyText(const std::string& text, const std::string& language);
   static void SpeakText(const std::string& text, const std::string& language);
+  static void AskLlama(const std::string& text, const std::string& language);
 
   static void SetWhisperEnabled(bool enabled) { _whisperEnabled = enabled; }
   static void SetLlamaEnabled(bool enabled) { _llamaEnabled = enabled; }
+  static void SetLanguage(const std::string& language) { 
+    if(_whisperDevice) _whisperDevice->setLanguage(language.c_str()); }
 
   static WhillatsTTS* tts() { return _ttsDevice.get(); }
   static WhillatsTranscriber* whisper() { return _whisperDevice.get(); }

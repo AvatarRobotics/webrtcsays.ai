@@ -489,6 +489,7 @@ bool DirectApplication::CreatePeerConnection() {
     kAudioDeviceModuleType = webrtc::AudioDeviceModule::kSpeechAudio; 
     webrtc::SpeechAudioDeviceFactory::SetWhisperEnabled(true);
     webrtc::SpeechAudioDeviceFactory::SetWhisperModelFilename(opts_.whisper_model);
+    webrtc::SpeechAudioDeviceFactory::SetLanguage(opts_.language);
   }
 
   if (opts_.llama && !opts_.llama_llava_yuv.empty()) {
@@ -825,6 +826,20 @@ void DirectApplication::HandleMessage(rtc::AsyncPacketSocket* socket,
     }
     RTC_LOG(LS_INFO) << "Speaking: [" << language << "] " << text;
     webrtc::SpeechAudioDeviceFactory::NotifyText(text, language);
+  } else if (message.find("WHISPER:") == 0) {
+    std::string payload = message.substr(8);
+    std::string language, text;
+    std::regex re("^\\[([^\\]]+)\\](.*)$");
+    std::smatch match;
+    if (std::regex_match(payload, match, re)) {
+      language = match[1].str();
+      text = match[2].str();
+    } else {
+      language = "en";
+      text = payload;
+    }
+    RTC_LOG(LS_INFO) << "Whispering: [" << language << "] " << text;
+    webrtc::SpeechAudioDeviceFactory::AskLlama(text, language);
   }
 }
 
