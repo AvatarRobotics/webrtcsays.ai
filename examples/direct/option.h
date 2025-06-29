@@ -102,6 +102,7 @@ struct Options {
     std::string target_name{}; // Name of user to call (for caller mode)
     std::string room_name{}; // Room name to join
     std::string language{}; // Language to use for speech
+    std::vector<std::string> whispers{}; // Whispers to use for speech
 };
 
 // Function to parse command line string to above options

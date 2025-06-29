@@ -279,7 +279,25 @@ Options parseOptions(const std::vector<std::string>& args) {
              RTC_LOG(LS_INFO) << "Config language: " << config_json["language"].asString();
              opts.language = config_json["language"].asString();
         }
+        if (config_json.isMember("whispers")) {
+            const Json::Value& w = config_json["whispers"];
 
+            if (w.isArray()) {                       // simple  ["foo","bar"]
+                for (const auto& v : w) {
+                    if (v.isString()) opts.whispers.push_back(v.asString());
+                }
+            } else if (w.isObject()) {               // i18n  { "en":[...], "zh":[...] }
+                for (const auto& lang : w.getMemberNames()) {
+                    const Json::Value& arr = w[lang];
+                    if (!arr.isArray()) continue;
+                    for (const auto& v : arr) {
+                        if (v.isString()) opts.whispers.push_back(v.asString());
+                    }
+                }
+            } else {
+                RTC_LOG(LS_WARNING) << "`whispers` is neither array nor object – ignored";
+            }
+        }
         // Booleans
         if (config_json.isMember("encryption") && config_json["encryption"].isBool()) {
              RTC_LOG(LS_INFO) << "Config encryption: " << config_json["encryption"].asBool(); // Log value

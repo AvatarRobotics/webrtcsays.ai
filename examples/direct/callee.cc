@@ -34,6 +34,8 @@
 #define SO_REUSEPORT 0x0200
 #endif
 
+using webrtc::PeerConnectionInterface;
+
 // DirectCallee Implementation
 DirectCallee::DirectCallee(Options opts) : DirectPeer(opts) {
   std::string ip;
@@ -288,17 +290,34 @@ void DirectCallee::OnCancel(rtc::AsyncPacketSocket* socket) {
   // Acknowledge the CANCEL so the caller proceeds to tear-down cleanly.
   SendMessage("OK");
 
-  // Close and release the current client socket. Do it on the main thread to
-  // avoid blocking the network thread that delivered the packet.
+  // Gracefully shut down the active PeerConnection (if any) so we release all
+  // WebRTC resources tied to the just-finished call, but keep the listening
+  // socket open so that we can accept the next incoming connection on the
+  // same TCP port without having to restart the whole DirectCalleeClient.
+  ShutdownInternal();
+
+  // Close and dispose of the per-connection TCP socket on the main thread in
+  // order to avoid blocking the network thread that delivered the packet.  We
+  // intentionally leave the listening socket (listen_socket_) intact so that
+  // the operating system continues to accept new connections on the already
+  // published port.  This eliminates the short time window during which a
+  // follow-up caller could observe "connection refused" before the callee has
+  // had a chance to restart and re-advertise a (potentially different) port.
   auto old_socket = std::move(tcp_socket_);
   main_thread()->PostTask([s = std::move(old_socket)]() mutable {
     // unique_ptr s will be destroyed here when the task runs.
   });
 
-  // Signal the outer control loop that this session is over; it will create a
-  // brand-new DirectCalleeClient which will in turn re-register with the
-  // signalling server.
-  connection_closed_event_.Set();
+  // NOTE: We intentionally do NOT signal connection_closed_event_ here.  The
+  // event is used by the outer application loop to decide when to tear down
+  // and recreate the entire DirectCalleeClient instance.  For a simple CANCEL
+  // (normal end-of-call) we can handle the clean-up in-place and stay ready
+  // for the next call immediately, avoiding any avoidable downtime.
+
+  // Mark that we handled a graceful CANCEL so that the forthcoming ICE state
+  // transitions (which will go to "closed") don't propagate to the outer
+  // control-loop via connection_closed_event_.
+  ignore_next_close_event_ = true;
 }
 
 void DirectCallee::OnClose(rtc::AsyncPacketSocket* socket) {
@@ -310,4 +329,20 @@ bool DirectCallee::SendMessage(const std::string& message) {
   APP_LOG(AS_INFO) << "WebSocket SEND: " << message;
   // Implementation of SendMessage method
   return DirectPeer::SendMessage(message);
+}
+
+// Override to optionally suppress the global connection-closed signal when we
+// have handled a graceful CANCEL (ignore_next_close_event_ == true).
+void DirectCallee::OnIceConnectionChange(PeerConnectionInterface::IceConnectionState new_state) {
+  if (ignore_next_close_event_ &&
+      (new_state == PeerConnectionInterface::kIceConnectionClosed ||
+       new_state == PeerConnectionInterface::kIceConnectionDisconnected ||
+       new_state == PeerConnectionInterface::kIceConnectionFailed)) {
+    RTC_LOG(LS_INFO) << "Ignoring IceConnectionChange('closed') triggered by graceful CANCEL.";
+    ignore_next_close_event_ = false; // consume flag
+    return; // Do NOT propagate to base, which would set connection_closed_event_
+  }
+
+  // Fallback to default behaviour
+  DirectPeer::OnIceConnectionChange(new_state);
 }

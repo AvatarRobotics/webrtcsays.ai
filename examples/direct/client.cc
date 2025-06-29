@@ -191,9 +191,6 @@ void DirectCallerClient::onPeerAddressResolved(const std::string& peer_id,
 void DirectCallerClient::initiateWebRTCCall(const std::string& ip, int port) {
     APP_LOG(AS_INFO) << "DirectCallerClient: Initiating WebRTC call to " << ip << ":" << port;
     
-    // Update opts_.address so the base class knows the correct remote endpoint
-    opts_.address = ip + ":" + std::to_string(port);
-
     // We are already initialized; just proceed to connect
 
     // Establish the raw socket/WebRTC signalling connection synchronously on

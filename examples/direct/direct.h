@@ -413,16 +413,15 @@ class DIRECT_API DirectPeer : public DirectApplication {
   void AddIceCandidate(const std::string& candidate_sdp);
 
   rtc::scoped_refptr<webrtc::AudioTrackInterface> audio_track_;
- private:
 
+ private:
+  // ICE candidates that arrive before descriptions are set
   std::vector<std::string> pending_ice_candidates_;
 
-  rtc::scoped_refptr<LambdaCreateSessionDescriptionObserver>
-      create_session_observer_;
-  rtc::scoped_refptr<LambdaSetLocalDescriptionObserver>
-      set_local_description_observer_;
-  rtc::scoped_refptr<LambdaSetRemoteDescriptionObserver>
-      set_remote_description_observer_;
+  // Observers are kept in members to extend their lifetime
+  rtc::scoped_refptr<LambdaCreateSessionDescriptionObserver> create_session_observer_;
+  rtc::scoped_refptr<LambdaSetLocalDescriptionObserver>      set_local_description_observer_;
+  rtc::scoped_refptr<LambdaSetRemoteDescriptionObserver>     set_remote_description_observer_;
 };
 
 class DIRECT_API DirectCallee : public DirectPeer, public sigslot::has_slots<> {
@@ -443,12 +442,20 @@ class DIRECT_API DirectCallee : public DirectPeer, public sigslot::has_slots<> {
   void OnCancel(rtc::AsyncPacketSocket* socket);
   bool SendMessage(const std::string& message) override;
 
+  // Override Peer callbacks to suppress teardown after graceful CANCEL
+  void OnIceConnectionChange(
+      webrtc::PeerConnectionInterface::IceConnectionState new_state) override;
+
   // Callee does not initiate connection, overrides base class
   bool Connect() { return false; }
 
   int local_port_;
   std::unique_ptr<rtc::AsyncTcpListenSocket> listen_socket_;
   std::unique_ptr<rtc::AsyncTCPSocket> current_client_socket_; // Dedicated client socket
+
+ private:
+  // Flag set by OnCancel() to suppress the next closed-event coming from ICE.
+  bool ignore_next_close_event_ = false;
 };
 
 class DIRECT_API DirectCaller : public DirectPeer {
