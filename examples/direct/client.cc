@@ -338,6 +338,11 @@ void DirectCalleeClient::StopListening() {
         listen_socket_.reset();  // Destructor closes the underlying OS socket
     }
 
+    // Pause WebSocket listener but keep TCP connection alive so registration persists.
+    if (signaling_client_) {
+        signaling_client_->pause();
+    }
+
     // Disconnect WebRTC and tear down per-connection state without a full cleanup.
     DirectApplication::Disconnect();
 
@@ -418,6 +423,11 @@ void DirectCalleeClient::setupWebRTCListener() {
     if (!DirectCallee::StartListening()) {
         APP_LOG(AS_ERROR) << "Failed to start WebRTC listener on port " << local_port_;
         return;
+    }
+
+    // Resume WebSocket listener now that we are ready to accept new calls.
+    if (signaling_client_) {
+        signaling_client_->resume();
     }
 
     APP_LOG(AS_INFO) << "DirectCalleeClient: WebRTC listener started on port " << local_port_;
@@ -509,21 +519,73 @@ DirectClient::DirectClient(const std::string& user_id)
     ws_client_ = std::make_unique<WebSocketClient>();
     ws_client_->set_network_thread(network_thread_.get());
 
-    // Set message callback so that incoming messages are dispatched to handler
-    ws_client_->set_message_callback([this](const std::string& message) {
+    default_ws_handler_ = [this](const std::string& message) {
         this->handleProtocolMessage(message);
+    };
+    ws_client_->set_message_callback(default_ws_handler_);
+
+    ws_client_->set_reconnect_callback([this]() {
+        // Re-register and re-publish address when socket comes back
+        if (!saved_room_.empty()) {
+            ws_client_->send_message("REGISTER:" + user_id_ + ":" + saved_room_);
+        }
+        if (!pending_address_.empty()) {
+            ws_client_->send_message(pending_address_);
+        }
     });
+
+    // Keep WebSocket connected; do not disconnect here.
 }
 
 DirectClient::~DirectClient() {
-    if (ws_client_) {
-        ws_client_->disconnect();
-        ws_client_.reset();
-    }
     if (network_thread_) {
-        //network_thread_->Quit();
-        network_thread_->Stop();
-        network_thread_.reset();
+        auto* nt = network_thread_.get();
+
+        if (rtc::Thread::Current() == nt) {
+            // Already executing on the network thread – cannot use BlockingCall
+            // and cannot join this thread from itself.  Do immediate cleanup
+            // then hand-off the join to a detached std::thread.
+
+            if (ws_client_) {
+                ws_client_->set_allow_reconnect(false);
+                ws_client_->disconnect();
+            }
+
+            // Move ownership of ws_client_ and network_thread_ to the joiner
+            auto ws = std::move(ws_client_);
+            auto nt_owned = network_thread_.release();
+
+            std::thread([ws = std::move(ws), nt_owned]() mutable {
+                // ws first to ensure no tasks access thread after Stop()
+                ws.reset();
+                if (nt_owned) {
+                    nt_owned->Stop();
+                    delete nt_owned;
+                }
+            }).detach();
+
+        } else {
+            // Normal case – we are on a different thread and can block.
+            if (ws_client_) {
+                rtc::Event done;
+                nt->PostTask([this, &done]() {
+                    ws_client_->set_allow_reconnect(false);
+                    ws_client_->disconnect();
+                    done.Set();
+                });
+                // Wait up to 5s for the disconnect task to execute.
+                done.Wait(webrtc::TimeDelta::Seconds(5));
+            }
+
+            // Allow remaining tasks through the normal Stop() flush.
+            nt->Stop();
+            network_thread_.reset();
+
+            ws_client_.reset();
+        }
+    } else {
+        // No network thread – just delete client if still present.
+        ws_client_.reset();
     }
 }
 
@@ -554,6 +616,7 @@ bool DirectClient::connectToSignalingServer(const std::string& server_host,
 
 void DirectClient::registerWithRoom(const std::string& room_name) {
     if (!connected_) return;
+    saved_room_ = room_name;
     std::string msg = "REGISTER:" + user_id_ + ":" + room_name;
     ws_client_->send_message(msg);
     registered_ = true;
@@ -720,6 +783,18 @@ void DirectClient::handleProtocolMessage(const std::string& message) {
         } else {
             APP_LOG(AS_WARNING) << "Malformed ICE message: " << message;
         }
+    }
+}
+
+void DirectClient::pause() {
+    if (ws_client_) {
+        ws_client_->set_message_callback(nullptr); // keep connection alive
+    }
+}
+
+void DirectClient::resume() {
+    if (ws_client_) {
+        ws_client_->set_message_callback(default_ws_handler_);
     }
 }
 

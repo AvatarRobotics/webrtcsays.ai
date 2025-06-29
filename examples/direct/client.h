@@ -74,6 +74,15 @@ public:
     bool sendHelloToUser(const std::string& target_user_id);  // Send HELLO to specific user
     bool requestUserList();  // Request list of users from signaling server
     
+    // Called by owner (callee) to ensure ADDRESS line is replayed after reconnect
+    void setAddressToPublish(const std::string& addr) { pending_address_ = addr; }
+    void setRoomToPublish(const std::string& room) { pending_room_ = room; }
+    
+    // Temporarily stop / restart WebSocket listening without closing the TCP
+    // connection so the peer stays registered on the signalling server.
+    void pause();   // Stop keep-alive & async_read
+    void resume();  // Restart them
+
 protected:
     std::unique_ptr<WebSocketClient> ws_client_;
     std::unique_ptr<rtc::Thread> network_thread_;
@@ -81,6 +90,7 @@ protected:
     std::string user_id_;
     bool connected_;
     bool registered_;
+    std::string pending_room_;
     
     // Callbacks for peer events
     PeerJoinedCallback peer_joined_callback_;
@@ -91,6 +101,8 @@ protected:
     HelloReceivedCallback hello_received_callback_;
     AddressReceivedCallback address_received_callback_;
     UserListReceivedCallback user_list_received_callback_;
+    
+    std::function<void(const std::string&)> default_ws_handler_;
     
 private:
     std::string getJwtToken(const std::string& server_host, int server_port, 
@@ -104,6 +116,9 @@ private:
     void handleAnswer(const Json::Value& message);
     void handleIceCandidate(const Json::Value& message);
     void handleError(const Json::Value& message);
+
+    std::string saved_room_;        // last room we registered with
+    std::string pending_address_;   // full ADDRESS:... line to replay after reconnect
 };
 
 // DirectCallerClient - Initiates calls to other peers by name using signaling server

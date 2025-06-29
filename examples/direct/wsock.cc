@@ -68,7 +68,6 @@ bool WebSocketClient::connect(const Config& config) {
 void WebSocketClient::disconnect() {
   running_ = false;
   connected_ = false;
-  allow_reconnect_ = false;
   message_callback_ = nullptr;
   stop_listening();
 
@@ -150,6 +149,12 @@ void WebSocketClient::stop_listening() {
   
   if (running_.exchange(false)) {
     APP_LOG(AS_INFO) << "WebSocketClient: Stopped WebSocket listener";
+
+    // Ensure any async_read that might still be executing has completed so
+    // that no further callbacks access internal buffers after we return.
+    while (read_in_progress_.load()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
   }
 }
 
@@ -934,6 +939,11 @@ void WebSocketClient::attempt_reconnect() {
   if (connect(config_)) {
     APP_LOG(AS_INFO) << "WebSocketClient: Reconnected successfully";
     start_listening();
+
+    // Notify owner that connection is alive again so it can re-register.
+    if (reconnect_callback_) {
+      reconnect_callback_();
+    }
   } else {
     APP_LOG(AS_ERROR) << "WebSocketClient: Reconnect failed, retrying in 2 seconds";
     if (network_thread_) {

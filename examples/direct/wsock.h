@@ -58,9 +58,13 @@ public:
     void disconnect();
     bool is_connected() const;
 
+    // Returns true if listening loop is currently active (ping + async_read)
+    bool is_running() const { return running_.load(); }
+
     // Message handling
     bool send_message(const std::string& message);
     void set_message_callback(std::function<void(const std::string&)> callback);
+    void set_reconnect_callback(std::function<void()> cb) { reconnect_callback_ = std::move(cb); }
     void start_listening();
     void stop_listening();
 
@@ -74,6 +78,9 @@ public:
     // Ping/Pong handling
     void send_ping();
     void send_pong_frame(const std::vector<unsigned char>& ping_payload);
+
+    // Enable or disable automatic reconnect logic
+    void set_allow_reconnect(bool value) { allow_reconnect_ = value; }
 
 private:
     // Connection state
@@ -124,6 +131,9 @@ private:
     // Utility methods
     void cleanup_connection();
     void log_ssl_error(const std::string& operation);
+
+    // callback invoked after a successful automatic reconnect
+    std::function<void()> reconnect_callback_;
 };
 
 class HttpClient {
