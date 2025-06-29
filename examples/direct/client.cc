@@ -15,6 +15,8 @@
 #include <vector>
 #include <json/json.h>
 #include "rtc_base/thread.h"
+#include <ifaddrs.h>
+#include <net/if.h>
 
 // DirectCallerClient Implementation
 
@@ -427,8 +429,9 @@ void DirectCalleeClient::publishAddressToSignalingServer() {
         return;
     }
 
-    // Discover first non-loopback IPv4 address (very lightweight)
+    // Discover first non-loopback IPv4 address
     std::string lan_ip = "127.0.0.1";
+
 #ifdef __APPLE__
     char hostname[256];
     if (gethostname(hostname, sizeof(hostname)) == 0) {
@@ -451,10 +454,32 @@ void DirectCalleeClient::publishAddressToSignalingServer() {
             freeaddrinfo(info);
         }
     }
-#endif
+#else  // Non-Apple (Linux, etc.)
+    // Extended discovery for non-Apple platforms
+#if !defined(_WIN32)
+    struct ifaddrs* ifaddr = nullptr;
+    if (getifaddrs(&ifaddr) == 0) {
+        for (struct ifaddrs* ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
+            if (!ifa->ifa_addr || !(ifa->ifa_flags & IFF_UP) || (ifa->ifa_flags & IFF_LOOPBACK)) {
+                continue; // Skip down or loopback interfaces
+            }
+
+            if (ifa->ifa_addr->sa_family == AF_INET) {
+                char ip[INET_ADDRSTRLEN];
+                if (inet_ntop(AF_INET, &((struct sockaddr_in*)ifa->ifa_addr)->sin_addr, ip, sizeof(ip))) {
+                    lan_ip = ip;
+                    break; // Take the first suitable IPv4
+                }
+            }
+        }
+        freeifaddrs(ifaddr);
+    }
+#endif // !_WIN32
+#endif // __APPLE__
 
     if (signaling_client_->sendAddress(opts_.user_name, lan_ip, local_port_)) {
         APP_LOG(AS_INFO) << "Published LAN address to signaling server: " << lan_ip << ":" << local_port_;
+        APP_LOG(AS_INFO) << "Local port is " << local_port_;
     } else {
         APP_LOG(AS_WARNING) << "Failed to publish ADDRESS message to signaling server";
     }

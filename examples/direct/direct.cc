@@ -251,6 +251,14 @@ void DirectApplication::Disconnect() {
 
   // Close all tracked sockets to ensure they are removed from PhysicalSocketServer
   RTC_LOG(LS_INFO) << "Closing tracked sockets during disconnect";
+  // Ensure any running Llama device is stopped before creating a new peer
+#if defined(WEBRTC_SPEECH_DEVICES) && LLAMA_NOTIFICATION_ENABLED
+  if (opts_.llama && llama_) {
+    RTC_LOG(LS_INFO) << "Stopping existing Llama device during Disconnect()";
+    llama_->stop();
+    llama_ = nullptr;
+  }
+#endif
   for (auto* socket : tracked_sockets_) {
     if (socket) {
       RTC_LOG(LS_INFO) << "Closing socket during disconnect";
@@ -715,6 +723,8 @@ bool DirectApplication::CreatePeerConnection() {
   if (!network_manager_) {
     // Pass pss() which returns the PhysicalSocketServer*, a valid SocketFactory*
     network_manager_ = new rtc::BasicNetworkManager(pss());
+
+    network_manager_->set_network_ignore_list({"docker0", "br0", "veth", "lo"});
   }
 
   // Add VPN list to ignore
