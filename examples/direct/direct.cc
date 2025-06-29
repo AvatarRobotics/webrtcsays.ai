@@ -68,7 +68,13 @@ void llamaCallback(bool success, const char* response, void* user_data) {
         language = "en";  // Default to English if empty
       }
       
-      app->SendMessage("LLAMA:[" + language + "]" + std::string(response));
+      if (app->IsConnected()) {
+        std::string message;
+        message.append("LLAMA:[").append(language).append("]").append(response);
+        app->SendMessage(message);
+      } else {
+        RTC_LOG(LS_WARNING) << "Llama notification arrived but peer is no longer connected. Dropping message: [" << language << "]" << response;
+      }
     }
   }
 }
@@ -400,33 +406,6 @@ bool DirectApplication::Initialize() {
     RTC_LOG(LS_ERROR) << "Failed to start threads";
     return false;
   }
-
-  // -------------------------------------------------------------------
-  // Make sure we have a PeerConnectionFactory ready.  The previous edit
-  // accidentally removed the block that created it, which led to a null
-  // dereference (seg-fault) below.  For now create it with the minimal set
-  // of components – this can be refined later if advanced audio features are
-  // needed.
-  // -------------------------------------------------------------------
-  // if (!peer_connection_factory_) {
-  //   dependencies_.network_thread = network_thread();
-  //   dependencies_.worker_thread = worker_thread();
-  //   dependencies_.signaling_thread = signaling_thread();
-
-  //   peer_connection_factory_ = webrtc::CreatePeerConnectionFactory(
-  //       dependencies_.network_thread,
-  //       dependencies_.worker_thread,
-  //       dependencies_.signaling_thread,
-  //       /*default adm*/ nullptr,
-  //       webrtc::CreateBuiltinAudioEncoderFactory(),
-  //       webrtc::CreateBuiltinAudioDecoderFactory(),
-  //       nullptr, nullptr, nullptr, nullptr);
-
-  //   if (!peer_connection_factory_) {
-  //     RTC_LOG(LS_ERROR) << "Failed to create PeerConnectionFactory";
-  //     return false;
-  //   }
-  // }
 
   return true;
 }

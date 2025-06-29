@@ -232,8 +232,15 @@ void DirectCallee::OnNewConnection(rtc::AsyncListenSocket* listen_socket,
   current_client_socket->SubscribeCloseEvent(
       this,  // use `this` or any stable tag
       [this](rtc::AsyncPacketSocket* socket, int err) {
-        RTC_LOG(LS_INFO) << "Wire‐level socket closed, err=" << err;
-        // wake up your main thread or signal your Event here
+        RTC_LOG(LS_INFO) << "Wire‐level socket closed, err=" << err << ". Initiating Disconnect().";
+
+        // Ensure we tear down media etc. to stop heavy workers like Llama.
+        // Do this on the main thread (same choice as Disconnect()) to avoid threading issues.
+        this->main_thread()->PostTask([self = this]() {
+          self->Disconnect();
+        });
+
+        // Signal any waiters so higher-level loops can restart.
         connection_closed_event_.Set();
       });
 
