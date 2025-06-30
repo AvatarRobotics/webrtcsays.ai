@@ -593,7 +593,7 @@ bool DirectClient::connectToSignalingServer(const std::string& server_host,
     WebSocketClient::Config cfg;
     cfg.host = server_host;
     cfg.port = std::to_string(std::stoi(server_port) + 1);
-    cfg.use_ssl = false;
+    cfg.use_ssl = true;
 
     if (!ws_client_->connect(cfg)) {
         APP_LOG(AS_ERROR) << "Failed to connect to WebSocket server";
