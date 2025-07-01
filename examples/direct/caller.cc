@@ -195,7 +195,7 @@ void DirectCaller::OnMessage(rtc::AsyncPacketSocket* socket,
         // Build INIT JSON with capability / option hints
         std::ostringstream oss;
         oss << "{";
-        oss << "\"agent\":\"text-only\"";  // basic capability hint
+        oss << "\"agent\":\"" << init_agent() << "\"";  // from DirectApplication preference
         // Include important runtime flags from opts_
         oss << ",\"encryption\":" << (opts_.encryption ? "true" : "false");
         oss << ",\"video\":" << (opts_.video ? "true" : "false");

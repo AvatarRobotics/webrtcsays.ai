@@ -228,6 +228,11 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
 
   std::string remote_agent() { return remote_agent_; }
 
+  // Local preference that we will announce in INIT. Default "audio".
+  void setInitAgent(const std::string& agent) { local_agent_ = agent; }
+  void useTextOnlyAgent() { local_agent_ = "text-only"; }
+  std::string init_agent() const { return local_agent_; }
+
  protected:
   Options opts_;  // Store command line options
   bool is_caller() const { return opts_.mode == "caller"; }
@@ -272,7 +277,8 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
   rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> video_source_ = nullptr;
   
   // Capability hint received from peer via INIT JSON ("text-only", "audio", ...)
-  std::string remote_agent_ = "text-only"; // default behaviour retains legacy LLAMA text notifications
+  std::string remote_agent_ = "audio"; // default behaviour: send pre-synthesised audio unless peer says otherwise
+  std::string local_agent_ = "audio";  // what we announce in our INIT
   
   void Cleanup();
 
