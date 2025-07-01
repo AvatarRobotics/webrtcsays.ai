@@ -226,6 +226,8 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
   RTC_OBJC_TYPE(RTCVideoTrack)* GetRemoteVideoTrack();
 #endif
 
+  std::string remote_agent() { return remote_agent_; }
+
  protected:
   Options opts_;  // Store command line options
   bool is_caller() const { return opts_.mode == "caller"; }
@@ -268,6 +270,9 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
   // Video sink provided by host (e.g. Obj-C app)
   std::unique_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> video_sink_;
   rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> video_source_ = nullptr;
+  
+  // Capability hint received from peer via INIT JSON ("text-only", "audio", ...)
+  std::string remote_agent_ = "text-only"; // default behaviour retains legacy LLAMA text notifications
   
   void Cleanup();
 

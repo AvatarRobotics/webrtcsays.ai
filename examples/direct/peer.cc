@@ -180,6 +180,28 @@ void DirectPeer::HandleMessage(rtc::AsyncPacketSocket* socket,
                              const rtc::SocketAddress& remote_addr) {
 
    if (message.find("INIT") == 0) {
+        // Default agent capability
+        remote_agent_ = "audio";
+
+        // Parse optional JSON payload after "INIT:"
+        if (message.size() > 5 && message[4] == ':') {
+          std::string json = message.substr(5);
+          size_t pos = json.find("\"agent\"");
+          if (pos != std::string::npos) {
+            pos = json.find(':', pos);
+            if (pos != std::string::npos) {
+              size_t start = json.find('"', pos+1);
+              if (start != std::string::npos) {
+                size_t end = json.find('"', start+1);
+                if (end != std::string::npos) {
+                  remote_agent_ = json.substr(start+1, end-start-1);
+                  RTC_LOG(LS_INFO) << "Remote agent capability set to '" << remote_agent_ << "'";
+                }
+              }
+            }
+          }
+        }
+
         if (!is_caller()) {
           Start();
         } else {

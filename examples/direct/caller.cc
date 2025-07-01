@@ -20,6 +20,7 @@
 #include <errno.h> // For errno
 #include <chrono>
 #include <thread>
+#include <sstream> // Added for building INIT JSON
 
 #include "direct.h"
 
@@ -191,7 +192,29 @@ void DirectCaller::OnMessage(rtc::AsyncPacketSocket* socket,
 
     // Allow for cases where multiple messages arrive concatenated in one TCP chunk.
     if (message.find("WELCOME") == 0) {
-        SendMessage("INIT");
+        // Build INIT JSON with capability / option hints
+        std::ostringstream oss;
+        oss << "{";
+        oss << "\"agent\":\"text-only\"";  // basic capability hint
+        // Include important runtime flags from opts_
+        oss << ",\"encryption\":" << (opts_.encryption ? "true" : "false");
+        oss << ",\"video\":" << (opts_.video ? "true" : "false");
+        if (!opts_.llama_model.empty()) {
+            oss << ",\"llama_model\":\"" << opts_.llama_model << "\"";
+        }
+        if (!opts_.llava_mmproj.empty()) {
+            oss << ",\"llava_mmproj\":\"" << opts_.llava_mmproj << "\"";
+        }
+        if (!opts_.room_name.empty()) {
+            oss << ",\"room_name\":\"" << opts_.room_name << "\"";
+        }
+        if (!opts_.language.empty()) {
+            oss << ",\"language\":\"" << opts_.language << "\"";
+        }
+        oss << "}";
+
+        std::string init_payload = "INIT:" + oss.str();
+        SendMessage(init_payload);
     } 
     else if (message.find("WAITING") == 0) {
         Start();
