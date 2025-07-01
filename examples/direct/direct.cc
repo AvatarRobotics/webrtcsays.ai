@@ -293,6 +293,11 @@ void DirectApplication::Disconnect() {
         RTC_LOG(LS_INFO) << "Peer connection closed and released on signaling thread (Disconnect).";
       }
     });
+
+    // after peer_connection_->Close();
+    audio_device_module_->StopPlayout();
+    audio_device_module_->StopRecording();
+    // don't destroy – just make sure it is in a clean state
   }
   
   // Preserve video pipeline components for reconnection but clear references
