@@ -44,6 +44,7 @@ DirectPeer::~DirectPeer() {
 
 void DirectPeer::ShutdownInternal() {
     RTC_LOG(LS_INFO) << "Shutting down peer connection (DirectPeer::ShutdownInternal)";
+    RTC_LOG(LS_INFO) << "Current peer connection state before shutdown: " << (peer_connection_ ? "Active" : "Inactive");
 
     // Perform close and release on the signaling thread
     signaling_thread()->PostTask([this]() {
@@ -52,10 +53,15 @@ void DirectPeer::ShutdownInternal() {
         audio_track_ = nullptr;
         video_track_ = nullptr;
         video_source_ = nullptr;
+        RTC_LOG(LS_INFO) << "Media tracks and sources released on signaling thread.";
         // Now close the PeerConnection, after tracks are released
         if (peer_connection_) {
             peer_connection_->Close();
+            RTC_LOG(LS_INFO) << "Peer connection closed on signaling thread.";
             peer_connection_ = nullptr; // Release ref ptr on signaling thread
+            RTC_LOG(LS_INFO) << "Peer connection pointer reset to nullptr.";
+        } else {
+            RTC_LOG(LS_INFO) << "No active peer connection to close.";
         }
         // NOTE: Releasing the factory on the signaling thread can trigger
         // rtc::Thread DCHECKs when its destructor executes blocking waits.
@@ -66,7 +72,7 @@ void DirectPeer::ShutdownInternal() {
         });
     });
 
-    RTC_LOG(LS_INFO) << "Peer connection and factory closed and released on signaling thread.";
+    RTC_LOG(LS_INFO) << "Peer connection and factory closed and released on signaling thread. Peer connection factory preserved for reconnection.";
 }
 
 void DirectPeer::Start() {

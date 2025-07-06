@@ -153,6 +153,11 @@ void DirectApplication::Cleanup() {
   // (observed as segfaults right after "failed to retrieve the playout delay").
   auto adm_shutdown_lambda = [this]() {
       if (audio_device_module_) {
+        // Ensure playout/recording are stopped first.  Terminate() may DCHECK
+        // if audio is still active (observed segfault in cleanup path).
+        audio_device_module_->StopPlayout();
+        audio_device_module_->StopRecording();
+
         RTC_LOG(LS_INFO) << "Terminating AudioDeviceModule before destruction";
         // Best-effort: ignore return value – some back-ends may not implement
         // Terminate() and simply return an error code.
@@ -340,28 +345,43 @@ void DirectApplication::Disconnect() {
       }
     });
 
-    // Preserve video pipeline components for reconnection but clear references
-    if (remote_video_track_) {
-      RTC_LOG(LS_INFO) << "Clearing remote video track reference for reconnection.";
-
-      if (video_sink_) {
-        auto remove_sink_lambda = [this]() {
-          if (remote_video_track_ && video_sink_) {
-            RTC_LOG(LS_INFO) << "Removing video sink from remote track on signaling thread.";
-            remote_video_track_->RemoveSink(video_sink_.get());
-          }
-        };
-
-        // Ensure we are on the signaling thread for WebRTC track operations.
-        if (rtc::Thread::Current() != signaling_thread()) {
-          signaling_thread()->BlockingCall(remove_sink_lambda);
-        } else {
-          remove_sink_lambda();
-        }
-      }
-
-      remote_video_track_ = nullptr;
+    // after peer_connection_->Close();
+    // Stop audio playout/recording on the *worker_thread* where the ADM was
+    // originally created.  Calling these methods from the wrong thread
+    // triggers a strict thread checker inside WebRTC (see
+    // audio_device_buffer.cc: TaskQueue doesn't match).  By executing the
+    // calls on the owning thread we avoid the fatal RTC_DCHECK failure that
+    // occurred during asynchronous teardown when the callee restarted.
+    if (audio_device_module_ && worker_thread()) {
+      worker_thread()->BlockingCall([this]() {
+        audio_device_module_->StopPlayout();
+        audio_device_module_->StopRecording();
+      });
     }
+    // don't destroy – just make sure it is in a clean state
+  }
+  
+  // Preserve video pipeline components for reconnection but clear references
+  if (remote_video_track_) {
+    RTC_LOG(LS_INFO) << "Clearing remote video track reference for reconnection.";
+
+    if (video_sink_) {
+      auto remove_sink_lambda = [this]() {
+        if (remote_video_track_ && video_sink_) {
+          RTC_LOG(LS_INFO) << "Removing video sink from remote track on signaling thread.";
+          remote_video_track_->RemoveSink(video_sink_.get());
+        }
+      };
+
+      // Ensure we are on the signaling thread for WebRTC track operations.
+      if (rtc::Thread::Current() != signaling_thread()) {
+        signaling_thread()->BlockingCall(remove_sink_lambda);
+      } else {
+        remove_sink_lambda();
+      }
+    }
+
+    remote_video_track_ = nullptr;
   }
   // peer_connection_factory_ = nullptr; // Keep factory alive for reconnection
 
@@ -688,12 +708,13 @@ bool DirectApplication::CreatePeerConnection() {
       // END OF WARNING
   }
 
-  // If a TURN server is configured prefer relay-only candidates to ensure
-  // connectivity across symmetric NATs / fire-walls. Otherwise gather all.
+  // If a TURN server is configured prefer relay-only candidates. Otherwise
+  // gather *only* server-reflexive candidates (skip host) so that peers won't
+  // choose unroutable 192.168./10./172.* addresses even after an ICE restart.
   if (opts_.turns.size()) {
     config.type = webrtc::PeerConnectionInterface::IceTransportsType::kRelay;
   } else {
-    config.type = webrtc::PeerConnectionInterface::IceTransportsType::kAll;
+    config.type = webrtc::PeerConnectionInterface::IceTransportsType::kNoHost;   // srflx-only
   }
   // Only set essential ICE configs
   config.bundle_policy = webrtc::PeerConnectionInterface::kBundlePolicyMaxBundle;
@@ -830,7 +851,8 @@ bool DirectApplication::CreatePeerConnection() {
 
   port_allocator->set_flags(flags);
   port_allocator->set_step_delay(cricket::kMinimumStepDelay);  // Speed up gathering
-  port_allocator->set_candidate_filter(cricket::CF_ALL);  // Allow all candidate types
+  // Candidate filter is derived from config.type (set above to kNoHost or
+  // kRelay); no explicit override needed.
 
   webrtc::PeerConnectionDependencies pc_dependencies(this);
   pc_dependencies.allocator = std::move(port_allocator);
