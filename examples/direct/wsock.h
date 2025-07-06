@@ -35,10 +35,11 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <memory>
 
 #include "direct.h"
 
-class WebSocketClient {
+class WebSocketClient : public std::enable_shared_from_this<WebSocketClient> {
 public:
     struct Config {
         std::string host;

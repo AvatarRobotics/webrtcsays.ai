@@ -121,25 +121,28 @@ void WebSocketClient::start_listening() {
   buffer_.clear();
   APP_LOG(AS_INFO) << "WebSocketClient::start_listening: Scheduling initial async_read";
 
-  // Start keep-alive pings
+  // Capture shared ownership so the object stays alive until callbacks finish.
+  auto self = shared_from_this();
+
+  // Start keep-alive pings (first fire after 10 s, then every 5 s).
   network_thread_->PostDelayedTask(
-      [this]() {
-        if (running_.load() && is_connected()) {
-          send_ping();
-          network_thread_->PostDelayedTask(
-              [this]() { 
-                if (running_.load()) {
-                  start_listening(); 
+      [self]() {
+        if (self->running_.load() && self->is_connected()) {
+          self->send_ping();
+          self->network_thread_->PostDelayedTask(
+              [self]() {
+                if (self->running_.load()) {
+                  self->start_listening();  // schedules next ping cycle / read
                 }
               },
-              webrtc::TimeDelta::Seconds(5));  // Ping every 5 seconds
+              webrtc::TimeDelta::Seconds(5));
         }
       },
       webrtc::TimeDelta::Seconds(10));
 
-  network_thread_->PostTask([this]() {
+  network_thread_->PostTask([self]() {
     APP_LOG(AS_INFO) << "WebSocketClient::start_listening: Initial async_read posted";
-    async_read();
+    self->async_read();
   });
 }
 
@@ -517,10 +520,11 @@ bool WebSocketClient::send_websocket_frame(const std::string& message) {
 
   // Force an immediate read to get the response
   if (network_thread_) {
-    network_thread_->PostTask([this]() {
-      if (running_.load() && !read_in_progress_.load()) {
+    auto self = shared_from_this();
+    network_thread_->PostTask([self]() {
+      if (self->running_.load() && !self->read_in_progress_.load()) {
         APP_LOG(AS_VERBOSE) << "Scheduling immediate read after sending frame";
-        async_read();
+        self->async_read();
       }
     });
   }
@@ -765,7 +769,10 @@ void WebSocketClient::async_read() {
     read_in_progress_ = false;
     if (message_callback_)
       message_callback_("DISCONNECTED");
-    network_thread_->PostTask([this]() { attempt_reconnect(); });
+    {
+      auto self = shared_from_this();
+      network_thread_->PostTask([self]() { self->attempt_reconnect(); });
+    }
     return;
   }
 
@@ -805,7 +812,10 @@ void WebSocketClient::async_read() {
           read_in_progress_ = false;
           if (message_callback_)
             message_callback_("DISCONNECTED");
-          network_thread_->PostTask([this]() { attempt_reconnect(); });
+          {
+            auto self = shared_from_this();
+            network_thread_->PostTask([self]() { self->attempt_reconnect(); });
+          }
           return;
         }
       }
@@ -827,7 +837,10 @@ void WebSocketClient::async_read() {
           read_in_progress_ = false;
           if (message_callback_)
             message_callback_("DISCONNECTED");
-          network_thread_->PostTask([this]() { attempt_reconnect(); });
+          {
+            auto self = shared_from_this();
+            network_thread_->PostTask([self]() { self->attempt_reconnect(); });
+          }
           return;
         }
       }
@@ -854,10 +867,11 @@ void WebSocketClient::async_read() {
 
   read_in_progress_ = false;
   if (running_.load()) {
+    auto self = shared_from_this();
     network_thread_->PostDelayedTask(
-        [this]() {
-          if (running_.load())
-            async_read();
+        [self]() {
+          if (self->running_.load())
+            self->async_read();
         },
         webrtc::TimeDelta::Millis(no_more_data ? 100 : 10));
   }
@@ -947,7 +961,8 @@ void WebSocketClient::attempt_reconnect() {
   } else {
     APP_LOG(AS_ERROR) << "WebSocketClient: Reconnect failed, retrying in 2 seconds";
     if (network_thread_) {
-      network_thread_->PostDelayedTask([this]() { attempt_reconnect(); },
+      auto self = shared_from_this();
+      network_thread_->PostDelayedTask([self]() { self->attempt_reconnect(); },
                                        webrtc::TimeDelta::Seconds(2));
     }
   }

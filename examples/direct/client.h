@@ -14,6 +14,10 @@
 #include <cerrno>
 #include <functional>
 #include <vector>
+#include <netdb.h>      // getaddrinfo for STUN lookup
+#include <cstdint>
+#include <cstdlib>
+#include <atomic>
 
 // Symbol visibility attributes for shared library export
 #if defined(__GNUC__) || defined(__clang__)
@@ -84,7 +88,7 @@ public:
     void resume();  // Restart them
 
 protected:
-    std::unique_ptr<WebSocketClient> ws_client_;
+    std::shared_ptr<WebSocketClient> ws_client_;
     std::unique_ptr<rtc::Thread> network_thread_;
     std::string jwt_token_;
     std::string user_id_;
@@ -134,6 +138,15 @@ private:
     rtc::Thread* owner_thread_ = nullptr; // Thread where the object was created
     UserListReceivedCallback user_list_callback_;
 
+    // True once we've launched the initial WebRTC dial. Prevents retry on
+    // secondary (private) ADDRESS lines when a public address was already
+    // tried.
+    std::atomic<bool> call_started_{false};
+
+    // Store first public candidate while we wait briefly for a private one.
+    std::string pending_ip_;
+    //int         pending_port_ = 0;
+
 public:
     // Alternate constructor taking fully-populated Options directly
     explicit DirectCallerClient(const Options& opts);
@@ -156,7 +169,7 @@ public:
 private:
     void onPeerJoined(const std::string& peer_id);
     void onPeerAddressResolved(const std::string& peer_id, const std::string& ip, int port);
-    void initiateWebRTCCall(const std::string& ip, int port);
+    bool initiateWebRTCCall(const std::string& ip, int port);
     void onAnswerReceived(const std::string& peer_id, const std::string& sdp);
     void onIceCandidateReceived(const std::string& peer_id, const std::string& candidate);
 };
@@ -221,3 +234,70 @@ EXPORT_API void DirectCallerClient_SetUserListCallbackC(
 #ifdef __cplusplus
 } // extern "C"
 #endif
+
+// -------------------------------------------------------------
+//  Minimal RFC-5389 binding-request helper inlined for convenience
+//  Returns true on success and fills out_ip / out_port with the
+//  server-reflexive (public) address that the NAT assigned to
+//  the given UDP socket.  Safe to call multiple times; the function
+//  is defined as `inline` to avoid multiple-definition errors when
+//  this header is included from several translation units.
+// -------------------------------------------------------------
+
+inline bool stun_discover(int             sockfd,
+                          const char*     stun_host,
+                          uint16_t        stun_port,
+                          std::string&    out_ip,
+                          uint16_t&       out_port) {
+    // Build a STUN binding request (20-byte header, zero attributes)
+    uint8_t pkt[20] = {0};
+    pkt[1] = 0x01;                    // Type: Binding Request (0x0001)
+    // Length = 0 → already zero
+    pkt[4] = 0x21; pkt[5] = 0x12; pkt[6] = 0xA4; pkt[7] = 0x42;  // Magic cookie
+    for (int i = 8; i < 20; ++i) pkt[i] = rand() & 0xff;         // Transaction ID
+
+    // Resolve STUN host
+    addrinfo hints{}; hints.ai_family = AF_INET; hints.ai_socktype = SOCK_DGRAM;
+    addrinfo* res = nullptr;
+    if (getaddrinfo(stun_host, nullptr, &hints, &res) != 0 || !res) return false;
+    sockaddr_in sa = *reinterpret_cast<sockaddr_in*>(res->ai_addr);
+    sa.sin_port = htons(stun_port);
+    freeaddrinfo(res);
+
+    // Send request
+    if (sendto(sockfd, pkt, sizeof(pkt), 0, reinterpret_cast<sockaddr*>(&sa), sizeof(sa)) < 0) return false;
+
+    // Wait for response (1-second timeout)
+    fd_set r; FD_ZERO(&r); FD_SET(sockfd, &r);
+    timeval tv{1, 0};
+    if (select(sockfd + 1, &r, nullptr, nullptr, &tv) <= 0) return false;
+
+    // Receive packet
+    uint8_t buf[512]; sockaddr_in from{}; socklen_t flen = sizeof(from);
+    ssize_t n = recvfrom(sockfd, buf, sizeof(buf), 0, reinterpret_cast<sockaddr*>(&from), &flen);
+    if (n < 20) return false;
+
+    // Parse STUN attributes for XOR-MAPPED-ADDRESS (0x0020)
+    size_t pos = 20;
+    const uint32_t cookie = 0x2112A442;
+    while (pos + 4 <= static_cast<size_t>(n)) {
+        uint16_t type = (buf[pos] << 8) | buf[pos + 1];
+        uint16_t len  = (buf[pos + 2] << 8) | buf[pos + 3];
+        if (type == 0x0020 && len >= 8 && pos + 4 + len <= static_cast<size_t>(n)) {
+            uint8_t fam = buf[pos + 5];
+            uint16_t xport = (buf[pos + 6] << 8) | buf[pos + 7];
+            if (fam == 0x01) {  // IPv4
+                uint32_t xip;
+                std::memcpy(&xip, buf + pos + 8, 4);
+                xip ^= htonl(cookie);
+                out_ip = inet_ntoa(*reinterpret_cast<in_addr*>(&xip));
+                out_port = xport ^ static_cast<uint16_t>(cookie >> 16);
+                return true;
+            }
+        }
+        pos += 4 + len;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------

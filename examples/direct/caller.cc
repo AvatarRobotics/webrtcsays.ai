@@ -21,6 +21,7 @@
 #include <chrono>
 #include <thread>
 #include <sstream> // Added for building INIT JSON
+#include <api/units/time_delta.h> // For webrtc::TimeDelta
 
 #include "direct.h"
 
@@ -179,8 +180,12 @@ bool DirectCaller::Connect() {
 void DirectCaller::OnConnect(rtc::AsyncPacketSocket* socket) {
     RTC_LOG(LS_INFO) << "Connected to " << remote_addr_.ToString();
     
-    // Start the message sequence
-    SendMessage("HELLO");
+    // Reset handshake tracking state for a fresh connection
+    hello_attempts_ = 0;
+    welcome_received_ = false;
+
+    // Kick-off HELLO (with automatic retries)
+    SendHelloWithRetry();
 }
 
 void DirectCaller::OnMessage(rtc::AsyncPacketSocket* socket,
@@ -192,6 +197,9 @@ void DirectCaller::OnMessage(rtc::AsyncPacketSocket* socket,
 
     // Allow for cases where multiple messages arrive concatenated in one TCP chunk.
     if (message.find("WELCOME") == 0) {
+        // Stop further HELLO retries – handshake completed successfully.
+        welcome_received_ = true;
+
         // Build INIT JSON with capability / option hints
         std::ostringstream oss;
         oss << "{";
@@ -220,8 +228,18 @@ void DirectCaller::OnMessage(rtc::AsyncPacketSocket* socket,
         Start();
     } 
     else if (message == "OK") {
+        // Remote acknowledged our CANCEL. Close PeerConnection but keep
+        // worker/signaling threads running so that we can place another
+        // call without having to re-create the whole DirectCaller instance.
         ShutdownInternal();
-        QuitThreads();
+
+        // Close and discard the obsolete TCP socket so that any subsequent
+        // WELCOME/INIT handshake for the next call is delivered to the new
+        // socket created by the next Connect().
+        if (tcp_socket_) {
+            tcp_socket_->Close();
+            tcp_socket_.reset();
+        }
     } else {
         HandleMessage(socket, message, remote_addr);
     }
@@ -242,4 +260,36 @@ void DirectCaller::Disconnect() {
     // Reset state to allow for a new connection
     tcp_socket_.reset();
     RTC_LOG(LS_INFO) << "Caller state reset for new connection.";
+}
+
+// -----------------------------------------------------------------------------
+// HELLO retry logic – ensures the callee receives a handshake even if the very
+// first packet races ahead of the callee's read callback registration.
+// -----------------------------------------------------------------------------
+
+void DirectCaller::SendHelloWithRetry() {
+    // If we already succeeded or exceeded max attempts, stop.
+    if (welcome_received_ || hello_attempts_ >= kMaxHelloAttempts) {
+        return;
+    }
+
+    // Send HELLO now.
+    if (SendMessage("HELLO")) {
+        RTC_LOG(LS_INFO) << "HELLO attempt " << (hello_attempts_ + 1)
+                         << " sent successfully";
+    } else {
+        RTC_LOG(LS_WARNING) << "Failed to send HELLO attempt " << (hello_attempts_ + 1);
+    }
+
+    ++hello_attempts_;
+
+    // Schedule next retry if necessary.
+    if (!welcome_received_ && hello_attempts_ < kMaxHelloAttempts) {
+        auto* nt = network_thread();
+        if (nt) {
+            nt->PostDelayedTask([this]() {
+                this->SendHelloWithRetry();
+            }, webrtc::TimeDelta::Millis(200));  // retry after 200 ms
+        }
+    }
 }

@@ -172,52 +172,98 @@ void DirectApplication::Cleanup() {
       adm_shutdown_lambda();
   }
 
-  if (rtc::Thread::Current() != main_thread_.get()) {
-    main_thread_->PostTask([this]() { Cleanup(); });
-    return;
+  // Ensure all pending tasks – including PeerConnectionFactoryProxy's
+  // DestroyInternal() that was just queued – have actually run before we
+  // proceed to stop / join the worker thread.  Post a no-op task and wait
+  // for it to execute as a barrier.
+
+  if (peer_connection_factory_) {
+    rtc::Event released;
+
+    if (signaling_thread_ && rtc::Thread::Current() != signaling_thread_.get()) {
+      // Marshal the release to the signaling thread – that is the thread
+      // where DestroyInternal() ultimately executes.
+      signaling_thread_->PostTask([this, &released]() {
+        peer_connection_factory_ = nullptr;
+        released.Set();
+      });
+    } else {
+      // Either no signaling thread or we are already on it.
+      peer_connection_factory_ = nullptr;
+      released.Set();
+    }
+
+    // Give more time for release to complete.
+    if (!released.Wait(webrtc::TimeDelta::Seconds(5))) {
+      RTC_LOG(LS_WARNING) << "Factory release timed out, forcing direct reset.";
+      peer_connection_factory_ = nullptr;
+    }
   }
 
-  // --- phase 1: close sockets while network thread is alive ------------
-  network_thread_->BlockingCall([this]() {
-      RTC_LOG(LS_INFO) << "Closing tracked sockets (phase-1)";
-      for (auto* s : tracked_sockets_) {
-          if (s) s->Close();         // triggers SSL/TCP shutdown sequence
-      }
-      tracked_sockets_.clear();
-  });
-  //  no Quit() yet -------------------------------------------------------
+  // Make sure the queued DestroyInternal() has really run before we shutdown
+  // any threads: post a no-op barrier to the signaling thread and wait for it.
 
-  // --- phase 2: wait until the network queue is empty -------------------
-  rtc::Event drained;
-  network_thread_->PostTask([&drained]() { drained.Set(); });
-  drained.Wait(webrtc::TimeDelta::Seconds(5));  // give it up to 5 s
-
-  // Only now is it safe to finish the thread.
-  network_thread_->Quit();
-  network_thread_->Stop();
-  network_thread_.reset();
-
-  // Stop threads in reverse order with a small delay to ensure graceful shutdown
-  if (worker_thread_) {
-    worker_thread_->Quit();
-    worker_thread_->Stop();
-    rtc::Thread::SleepMs(50);
-    worker_thread_.reset();
-  }
   if (signaling_thread_) {
-    signaling_thread_->Quit();
-    signaling_thread_->Stop();
-    rtc::Thread::SleepMs(50);
-    signaling_thread_.reset();
+    rtc::Event barrier;
+    signaling_thread_->PostTask([&barrier]() { barrier.Set(); });
+    // Give more time for DestroyInternal to complete.
+    if (!barrier.Wait(webrtc::TimeDelta::Seconds(5))) {
+      RTC_LOG(LS_WARNING) << "Signaling thread barrier timed out, tasks may not have completed.";
+    }
   }
-  if (ws_thread_) {
-    ws_thread_->Quit();
-    ws_thread_->Stop();
-    rtc::Thread::SleepMs(50);
-    ws_thread_.reset();
+
+  // Ensure any cleanup tasks queued on the worker thread have run.
+  if (worker_thread_) {
+    rtc::Event wbarrier;
+    worker_thread_->PostTask([&wbarrier]() { wbarrier.Set(); });
+    // Give more time for any cleanup tasks.
+    if (!wbarrier.Wait(webrtc::TimeDelta::Seconds(5))) {
+      RTC_LOG(LS_WARNING) << "Worker thread barrier timed out, tasks may not have completed.";
+    }
   }
+
+  // Utility: stop and destroy a rtc::Thread from *another* thread to avoid
+  // triggering the DCHECK(!IsCurrent()) inside rtc::Thread::Join().
+  auto safe_stop_and_reset = [](std::unique_ptr<rtc::Thread>& th) {
+    if (!th) {
+      return;
+    }
+    // Always transfer ownership to a helper std::thread so the Stop()/Join()
+    // call is guaranteed to execute on a *different* OS thread than the one
+    // represented by the rtc::Thread instance, eliminating any possibility
+    // of hitting the `!IsCurrent()` DCHECK inside rtc::Thread::Join().
+    std::thread([owned = th.release()]() {
+      if (owned) {
+        owned->Quit();
+        owned->Stop();  // safe: we are not the rtc::Thread we are stopping
+        delete owned;
+      }
+    }).detach();
+  };
+
+  // Stop network and signaling first, worker last (after barriers).
+  safe_stop_and_reset(network_thread_);
+  safe_stop_and_reset(signaling_thread_);
+  safe_stop_and_reset(worker_thread_);
+  rtc::Thread::SleepMs(50);
+  safe_stop_and_reset(ws_thread_);
+  rtc::Thread::SleepMs(50);
+
   if (main_thread_) {
-    main_thread_.reset();
+    if (rtc::Thread::Current() != main_thread_.get()) {
+      safe_stop_and_reset(main_thread_);
+    } else {
+      // We ARE on main_thread_. Transfer ownership and shut it down from a
+      // helper so the Join happens off-thread and avoids the DCHECK.
+      rtc::Thread* owned = main_thread_.release();
+      std::thread([owned]() {
+        if (owned) {
+          owned->Quit();
+          owned->Stop();
+          delete owned;
+        }
+      }).detach();
+    }
   }
 
   // Clear remaining members
@@ -294,33 +340,28 @@ void DirectApplication::Disconnect() {
       }
     });
 
-    // after peer_connection_->Close();
-    audio_device_module_->StopPlayout();
-    audio_device_module_->StopRecording();
-    // don't destroy – just make sure it is in a clean state
-  }
-  
-  // Preserve video pipeline components for reconnection but clear references
-  if (remote_video_track_) {
-    RTC_LOG(LS_INFO) << "Clearing remote video track reference for reconnection.";
+    // Preserve video pipeline components for reconnection but clear references
+    if (remote_video_track_) {
+      RTC_LOG(LS_INFO) << "Clearing remote video track reference for reconnection.";
 
-    if (video_sink_) {
-      auto remove_sink_lambda = [this]() {
-        if (remote_video_track_ && video_sink_) {
-          RTC_LOG(LS_INFO) << "Removing video sink from remote track on signaling thread.";
-          remote_video_track_->RemoveSink(video_sink_.get());
+      if (video_sink_) {
+        auto remove_sink_lambda = [this]() {
+          if (remote_video_track_ && video_sink_) {
+            RTC_LOG(LS_INFO) << "Removing video sink from remote track on signaling thread.";
+            remote_video_track_->RemoveSink(video_sink_.get());
+          }
+        };
+
+        // Ensure we are on the signaling thread for WebRTC track operations.
+        if (rtc::Thread::Current() != signaling_thread()) {
+          signaling_thread()->BlockingCall(remove_sink_lambda);
+        } else {
+          remove_sink_lambda();
         }
-      };
-
-      // Ensure we are on the signaling thread for WebRTC track operations.
-      if (rtc::Thread::Current() != signaling_thread()) {
-        signaling_thread()->BlockingCall(remove_sink_lambda);
-      } else {
-        remove_sink_lambda();
       }
-    }
 
-    remote_video_track_ = nullptr;
+      remote_video_track_ = nullptr;
+    }
   }
   // peer_connection_factory_ = nullptr; // Keep factory alive for reconnection
 
@@ -337,6 +378,26 @@ void DirectApplication::Disconnect() {
   rtc::Thread::SleepMs(100); // Delay (100ms) to ensure operations complete
 
   RTC_LOG(LS_INFO) << "Disconnected, ready for reconnection";
+
+  // --- NEW BLOCK ---------------------------------------------------------
+  if (audio_device_module_) {
+    RTC_LOG(LS_INFO) << "Disconnect(): terminating and releasing ADM";
+    // All ADM calls must happen on the same thread where the ADM was created
+    // (our dedicated worker thread) otherwise WebRTC will DCHECK like:
+    //   "TaskQueue doesn't match".
+    worker_thread()->BlockingCall([this]() {
+      if (!audio_device_module_) {
+        return; // Already nulled from another path.
+      }
+      // Stop audio operations before termination to ensure no pending tasks
+      audio_device_module_->StopPlayout();
+      audio_device_module_->StopRecording();
+      audio_device_module_->Terminate();
+      audio_device_module_ = nullptr;
+      dependencies_.adm   = nullptr;
+    });
+  }
+  // -----------------------------------------------------------------------
 }
 
 void DirectApplication::Run() {
@@ -392,6 +453,29 @@ DirectApplication::~DirectApplication() {
   if (!should_quit_)
     should_quit_ = true;
   Cleanup();
+
+  // Even if Cleanup() was previously executed (and thus skipped), member
+  // rtc::Thread instances may still be alive at this point because the object
+  // can be destroyed on one of its own internal threads after asynchronous
+  // operations.  Make absolutely sure they are torn down from a helper thread
+  // so we never invoke Stop()/Join() on the same thread that is being joined.
+
+  auto safe_stop_and_reset = [](std::unique_ptr<rtc::Thread>& th) {
+    if (!th) return;
+    std::thread([owned = th.release()]() {
+      if (owned) {
+        owned->Quit();
+        owned->Stop();
+        delete owned;
+      }
+    }).detach();
+  };
+
+  safe_stop_and_reset(network_thread_);
+  safe_stop_and_reset(worker_thread_);
+  safe_stop_and_reset(signaling_thread_);
+  safe_stop_and_reset(ws_thread_);
+  safe_stop_and_reset(main_thread_);
 }
 
 bool DirectApplication::Initialize() {
@@ -839,6 +923,13 @@ void DirectApplication::HandleMessage(rtc::AsyncPacketSocket* socket,
     }
     RTC_LOG(LS_INFO) << "Whispering: [" << language << "] " << text;
     webrtc::SpeechAudioDeviceFactory::AskLlama(text, language);
+  } else if (message == "OK") {
+    ShutdownInternal();            // close PeerConnection
+
+    if (tcp_socket_) {             // <-- NEW
+        tcp_socket_->Close();      // close FD
+        tcp_socket_.reset();       // **remove from dispatcher**
+    }
   }
 }
 

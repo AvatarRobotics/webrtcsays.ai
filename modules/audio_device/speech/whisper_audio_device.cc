@@ -96,8 +96,23 @@ WhisperAudioDevice::WhisperAudioDevice(
 }
 
 WhisperAudioDevice::~WhisperAudioDevice() {
+  // Stop any ongoing playout/recording to ensure no more callbacks after destruction.
+  if (_playing) {
+    StopPlayout();
+  }
+  if (_recording) {
+    StopRecording();
+  }
 
-  // Free buffers
+  // Guard shared resources against concurrent access.
+  {
+    absl::MutexLock lock(&_queueMutex);
+    _ttsBuffer.clear();
+    std::queue<std::string> empty;
+    std::swap(_textQueue, empty);
+  }
+
+  // Free dynamically allocated buffers.
   delete[] _recordingBuffer;
   delete[] _playoutBuffer;
 }
@@ -314,8 +329,8 @@ void WhisperAudioDevice::SetTTSBuffer(const uint16_t* buffer, size_t buffer_size
       prev_y = y;
   }
   // Append new samples to the buffer
-  _ttsBuffer.insert(_ttsBuffer.end(), filtered_buffer.begin(), filtered_buffer.end());
-  RTC_LOG(LS_VERBOSE) << "Appended " << buffer_size << " samples to TTS buffer, total: " << _ttsBuffer.size();
+  _ttsBuffer.insert(_ttsBuffer.end(), 
+                    filtered_buffer.begin(), filtered_buffer.end());
 }
 
 bool WhisperAudioDevice::RecThreadProcess() {
@@ -329,36 +344,38 @@ bool WhisperAudioDevice::RecThreadProcess() {
   // Check if it's time to process another 10ms chunk
   if (_lastCallRecordMillis == 0 || currentTime - _lastCallRecordMillis >= 10) {
     // Handle audio buffer playback
-    if (!_ttsBuffer.empty()) {
-      if (_ttsIndex >= _ttsBuffer.size()) {
-        RTC_LOG(LS_INFO) << "Finished playing TTS buffer, resetting";
-        _ttsIndex = 0;
-        _ttsBuffer.clear();
-      } else {
-        size_t remainingSamples = _ttsBuffer.size() - _ttsIndex;
-        size_t samplesToCopy = std::min(_recordingFramesIn10MS, remainingSamples);
+    {
+      // Guard concurrent access to _ttsBuffer and _ttsIndex.
+      absl::MutexLock qlock(& _queueMutex);
 
-        if (samplesToCopy > 0 && _recordingBuffer != nullptr) {
-          // Copy TTS samples into recording buffer (as bytes)
-          const int8_t* src = reinterpret_cast<const int8_t*>(&_ttsBuffer[_ttsIndex]);
-          const int8_t* end = src + samplesToCopy * sizeof(short);
-          std::copy(src, end, _recordingBuffer);
-          _ttsIndex += samplesToCopy;
+      if (!_ttsBuffer.empty()) {
+        if (_ttsIndex >= _ttsBuffer.size()) {
+          RTC_LOG(LS_INFO) << "Finished playing TTS buffer, resetting";
+          _ttsIndex = 0;
+          _ttsBuffer.clear();
+        } else {
+          size_t remainingSamples = _ttsBuffer.size() - _ttsIndex;
+          size_t samplesToCopy = std::min(_recordingFramesIn10MS, remainingSamples);
 
-          // Fill any leftover with silence
-          std::fill_n(
-            _recordingBuffer + samplesToCopy * sizeof(short),
-            (_recordingFramesIn10MS - samplesToCopy) * sizeof(short),
-            int8_t(0)
-          );
+          if (samplesToCopy > 0 && _recordingBuffer != nullptr) {
+            // Copy TTS samples into recording buffer (as bytes)
+            const int8_t* src = reinterpret_cast<const int8_t*>(& _ttsBuffer[_ttsIndex]);
+            const int8_t* end = src + samplesToCopy * sizeof(short);
+            std::copy(src, end, _recordingBuffer);
+            _ttsIndex += samplesToCopy;
 
-          mutex_.Unlock();
-          _ptrAudioBuffer->SetRecordedBuffer(_recordingBuffer, _recordingFramesIn10MS);
-          _ptrAudioBuffer->DeliverRecordedData();
-          mutex_.Lock();
+            // Fill any leftover with silence
+            std::fill_n(
+              _recordingBuffer + samplesToCopy * sizeof(short),
+              (_recordingFramesIn10MS - samplesToCopy) * sizeof(short),
+              int8_t(0)
+            );
+          }
         }
       }
-    } else {
+    }
+
+    if (_ttsBuffer.empty()) {
       // Only process new text when current audio is finished
       bool shouldSynthesize = false;
       std::string textToSpeak;
@@ -378,17 +395,25 @@ bool WhisperAudioDevice::RecThreadProcess() {
             textToSpeak,
             SpeechAudioDeviceFactory::GetLanguage());
       } else {
-        // Send silence for a full 10ms frame
+        // Send silence for a full 10ms frame when there's nothing to play or synthesize.
         std::fill_n(
-          _recordingBuffer,
-          _recordingFramesIn10MS * sizeof(short),
-          int8_t(0)
-        );
+            _recordingBuffer,
+            _recordingFramesIn10MS * sizeof(short),
+            int8_t(0));
+
         mutex_.Unlock();
         _ptrAudioBuffer->SetRecordedBuffer(_recordingBuffer, _recordingFramesIn10MS);
         _ptrAudioBuffer->DeliverRecordedData();
         mutex_.Lock();
       }
+    }
+
+    // If we just processed TTS samples (buffer was not empty), deliver them.
+    if (!_ttsBuffer.empty()) {
+      mutex_.Unlock();
+      _ptrAudioBuffer->SetRecordedBuffer(_recordingBuffer, _recordingFramesIn10MS);
+      _ptrAudioBuffer->DeliverRecordedData();
+      mutex_.Lock();
     }
 
     _lastCallRecordMillis = currentTime;

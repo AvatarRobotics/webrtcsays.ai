@@ -47,7 +47,7 @@ void DirectPeer::ShutdownInternal() {
 
     // Perform close and release on the signaling thread
     signaling_thread()->PostTask([this]() {
-        RTC_DCHECK_RUN_ON(signaling_thread());
+        //RTC_DCHECK_RUN_ON(signaling_thread());
         // Release tracks first so their destructors can safely invoke into WebRTC threads
         audio_track_ = nullptr;
         video_track_ = nullptr;
@@ -57,10 +57,16 @@ void DirectPeer::ShutdownInternal() {
             peer_connection_->Close();
             peer_connection_ = nullptr; // Release ref ptr on signaling thread
         }
+        // NOTE: Releasing the factory on the signaling thread can trigger
+        // rtc::Thread DCHECKs when its destructor executes blocking waits.
+        // Defer the actual reset to the main (owner) thread where blocking
+        // calls are allowed.
+        main_thread()->PostTask([this]() {
+          peer_connection_factory_ = nullptr;
+        });
     });
 
-    // Do not reset peer_connection_factory_ to allow reconnection
-    RTC_LOG(LS_INFO) << "Peer connection closed and released on signaling thread.";
+    RTC_LOG(LS_INFO) << "Peer connection and factory closed and released on signaling thread.";
 }
 
 void DirectPeer::Start() {

@@ -179,25 +179,37 @@ void DirectCallerClient::onPeerAddressResolved(const std::string& peer_id,
         return;
     }
 
+    // Log the current state to diagnose why a call might not start
     APP_LOG(AS_INFO) << "DirectCallerClient: Address resolved for " << peer_id
-                     << " -> " << ip << ":" << port;
+                     << " -> " << ip << ":" << port << ", call_started_: " << (call_started_.load() ? "true" : "false");
 
-    // Run call setup on a fresh native thread
-    std::thread([this, ip, port] {
-        initiateWebRTCCall(ip, port);
-    }).detach();
+    // Ignore if we've already started dialing and the current connection attempt is still active
+    if (call_started_.load()) {
+        APP_LOG(AS_WARNING) << "DirectCallerClient: Call already started or attempted for " << peer_id << ", ignoring new address " << ip << ":" << port;
+        return;
+    }
+
+    call_started_ = true;
+    APP_LOG(AS_INFO) << "DirectCallerClient: Attempting connection to address " << ip << ":" << port;
+    std::thread([this, ip, port] { initiateWebRTCCall(ip, port); }).detach();
 }
 
-void DirectCallerClient::initiateWebRTCCall(const std::string& ip, int port) {
+bool DirectCallerClient::initiateWebRTCCall(const std::string& ip, int port) {
     APP_LOG(AS_INFO) << "DirectCallerClient: Initiating WebRTC call to " << ip << ":" << port;
     
     // We are already initialized; just proceed to connect
 
-    // Establish the raw socket/WebRTC signalling connection synchronously on
-    // this (native) thread.
     if (!DirectCaller::Connect(ip.c_str(), port)) {
-        APP_LOG(AS_ERROR) << "Failed to connect DirectCaller to " << ip << ":" << port;
-        return;
+        APP_LOG(AS_ERROR) << "Connect to " << ip << ':' << port << " failed";
+
+        // Ask the signalling server for fresh address info.
+        if (signaling_client_) {
+            APP_LOG(AS_INFO) << "Re-sending HELLO to request updated address";
+            signaling_client_->sendHelloToUser(opts_.target_name);
+        }
+
+        call_started_ = false;    // allow the next ADDRESS to be processed
+        return false;
     }
 
     // After the socket is connected, start the DirectApplication event loop
@@ -205,6 +217,7 @@ void DirectCallerClient::initiateWebRTCCall(const std::string& ip, int port) {
     std::thread([this]() {
         this->RunOnBackgroundThread();
     }).detach();
+    return true;
 }
 
 void DirectCallerClient::onAnswerReceived(const std::string& peer_id, const std::string& sdp) {
@@ -484,11 +497,34 @@ void DirectCalleeClient::publishAddressToSignalingServer() {
 #endif // !_WIN32
 #endif // __APPLE__
 
-    if (signaling_client_->sendAddress(opts_.user_name, lan_ip, local_port_)) {
-        APP_LOG(AS_INFO) << "Published LAN address to signaling server: " << lan_ip << ":" << local_port_;
-        APP_LOG(AS_INFO) << "Local port is " << local_port_;
+    //------------------------------------------------------------------
+    // NEW: discover translated (public) port via STUN and advertise it.
+    //------------------------------------------------------------------
+    std::string pubIp;
+    uint16_t   pubPort = 0;
+    int tmp_sock = ::socket(AF_INET, SOCK_DGRAM, 0);
+    bool stun_ok = false;
+    if (tmp_sock >= 0) {
+        stun_ok = stun_discover(tmp_sock, "stun.l.google.com", 19302,
+                                 pubIp, pubPort);
+        ::close(tmp_sock);
+    }
+
+    if (stun_ok) {
+        // Advertise the public endpoint first so remote peers try it.
+        APP_LOG(AS_INFO) << "STUN discovered public endpoint " << pubIp << ":" << pubPort;
+        signaling_client_->sendAddress(opts_.user_name, pubIp, static_cast<int>(pubPort));
+
+        // After a short delay, publish the LAN address as a *secondary* option
+        // for peers that might share the same subnet.  We choose a delay long
+        // enough for the caller to process the first ADDRESS and begin its
+        // connection attempt before seeing the fallback.
+        signaling_thread()->PostDelayedTask([this, lan_ip]() {
+            signaling_client_->sendAddress(opts_.user_name, lan_ip, local_port_);
+        }, webrtc::TimeDelta::Millis(400));
     } else {
-        APP_LOG(AS_WARNING) << "Failed to publish ADDRESS message to signaling server";
+        // STUN failed → fall back to LAN only
+        signaling_client_->sendAddress(opts_.user_name, lan_ip, local_port_);
     }
 }
 
@@ -512,8 +548,10 @@ DirectClient::DirectClient(const std::string& user_id)
     network_thread_->SetName("WebSocketNetworkThread", nullptr);
     network_thread_->Start();
 
-    // Now create the WebSocket client and attach the thread
-    ws_client_ = std::make_unique<WebSocketClient>();
+    // Now create the WebSocket client and attach the thread.  Must use
+    // std::make_shared because WebSocketClient derives from
+    // enable_shared_from_this and calls shared_from_this() internally.
+    ws_client_ = std::make_shared<WebSocketClient>();
     ws_client_->set_network_thread(network_thread_.get());
 
     default_ws_handler_ = [this](const std::string& message) {

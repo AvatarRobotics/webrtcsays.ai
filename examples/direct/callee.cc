@@ -318,6 +318,16 @@ void DirectCallee::OnCancel(rtc::AsyncPacketSocket* socket) {
   // transitions (which will go to "closed") don't propagate to the outer
   // control-loop via connection_closed_event_.
   ignore_next_close_event_ = true;
+
+  worker_thread()->BlockingCall([this]() {
+    if (audio_device_module_) {
+      audio_device_module_->StopPlayout();
+      audio_device_module_->StopRecording();
+      audio_device_module_->Terminate();
+      audio_device_module_ = nullptr;
+      dependencies_.adm   = nullptr;
+    }
+  });
 }
 
 void DirectCallee::OnClose(rtc::AsyncPacketSocket* socket) {
@@ -345,4 +355,16 @@ void DirectCallee::OnIceConnectionChange(PeerConnectionInterface::IceConnectionS
 
   // Fallback to default behaviour
   DirectPeer::OnIceConnectionChange(new_state);
+}
+
+void DirectCallee::ShutdownInternal() {
+  if (peer_connection_) {
+    peer_connection_->Close();
+    peer_connection_ = nullptr;
+  }
+
+  // Defer factory destruction to main thread so blocking waits are allowed
+  main_thread()->PostTask([this]() {
+    peer_connection_factory_ = nullptr;
+  });
 }

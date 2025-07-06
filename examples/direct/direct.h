@@ -457,6 +457,9 @@ class DIRECT_API DirectCallee : public DirectPeer, public sigslot::has_slots<> {
   void OnIceConnectionChange(
       webrtc::PeerConnectionInterface::IceConnectionState new_state) override;
 
+  // Cleanly closes PeerConnection and defers heavy destruction to main thread.
+  void ShutdownInternal() override;
+
   // Callee does not initiate connection, overrides base class
   bool Connect() { return false; }
 
@@ -487,6 +490,9 @@ class DIRECT_API DirectCaller : public DirectPeer {
   // bool SendMessage(const std::string& message);
   virtual void Disconnect() override;
 
+  // Getter for current remote address
+  rtc::SocketAddress GetRemoteAddress() const { return remote_addr_; }
+
  private:
   // Called when data is received on the socket
   void OnMessage(rtc::AsyncPacketSocket* socket,
@@ -498,6 +504,16 @@ class DIRECT_API DirectCaller : public DirectPeer {
   void OnConnect(rtc::AsyncPacketSocket* socket);
   void OnClose(rtc::AsyncPacketSocket* socket) override {}
   
+  // Retry logic for HELLO handshake in case the very first packet is lost
+  void SendHelloWithRetry();        // Sends HELLO and schedules retries
+
+  // Tracks whether WELCOME has been received so we can stop retrying
+  bool welcome_received_ = false;
+  // Current number of HELLO attempts performed for the active connection
+  int hello_attempts_ = 0;
+
+  static constexpr int kMaxHelloAttempts = 5;   // Give up after 5 attempts
+
   rtc::SocketAddress remote_addr_;
   // std::unique_ptr<rtc::AsyncTCPSocket> tcp_socket_;
   std::chrono::steady_clock::time_point last_disconnect_time_;
