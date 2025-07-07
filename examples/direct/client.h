@@ -145,7 +145,7 @@ private:
 
     // Store first public candidate while we wait briefly for a private one.
     std::string pending_ip_;
-    //int         pending_port_ = 0;
+    int         pending_port_ = 0;
 
 public:
     // Alternate constructor taking fully-populated Options directly

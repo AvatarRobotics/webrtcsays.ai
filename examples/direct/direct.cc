@@ -711,10 +711,14 @@ bool DirectApplication::CreatePeerConnection() {
   // If a TURN server is configured prefer relay-only candidates. Otherwise
   // gather *only* server-reflexive candidates (skip host) so that peers won't
   // choose unroutable 192.168./10./172.* addresses even after an ICE restart.
-  if (opts_.turns.empty())
-    config.type = webrtc::PeerConnectionInterface::kNoHost;   // srflx only
-  else
-    config.type = webrtc::PeerConnectionInterface::kRelay;
+#if 1
+  // Allow host, srflx and relay candidates so local/LAN calls can connect via
+  // direct host addresses.  Previously we used kNoHost which filtered them
+  // out and prevented peer-to-peer on the same subnet.
+  config.type = webrtc::PeerConnectionInterface::kAll;
+#else
+  config.type = webrtc::PeerConnectionInterface::kNoHost;  // srflx + relay only
+#endif
 
     // Only set essential ICE configs
   config.bundle_policy = webrtc::PeerConnectionInterface::kBundlePolicyMaxBundle;

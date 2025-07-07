@@ -17,6 +17,7 @@
 #include "rtc_base/thread.h"
 #include <ifaddrs.h>
 #include <net/if.h>
+#include <regex>
 
 // DirectCallerClient Implementation
 
@@ -174,6 +175,14 @@ void DirectCallerClient::onPeerJoined(const std::string& peer_id) {
 void DirectCallerClient::onPeerAddressResolved(const std::string& peer_id,
                                                const std::string& ip,
                                                int port) {
+
+    auto is_private_ip = [](const std::string& addr) {
+        // Quick check for RFC1918 ranges 10.0.0.0/8 , 172.16.0.0/12 , 192.168.0.0/16
+        return addr.rfind("10.",   0)   == 0 ||
+               addr.rfind("192.168.", 0) == 0 ||
+               std::regex_match(addr, std::regex(R"(^172\.(1[6-9]|2[0-9]|3[01])\.)"));
+    };
+
     // Only act on the target user (if specified)
     if (!opts_.target_name.empty() && peer_id != opts_.target_name) {
         return;
@@ -183,15 +192,41 @@ void DirectCallerClient::onPeerAddressResolved(const std::string& peer_id,
     APP_LOG(AS_INFO) << "DirectCallerClient: Address resolved for " << peer_id
                      << " -> " << ip << ":" << port << ", call_started_: " << (call_started_.load() ? "true" : "false");
 
-    // Ignore if we've already started dialing and the current connection attempt is still active
     if (call_started_.load()) {
-        APP_LOG(AS_WARNING) << "DirectCallerClient: Call already started or attempted for " << peer_id << ", ignoring new address " << ip << ":" << port;
+        // Already trying one address – remember this one as a fallback.
+        APP_LOG(AS_INFO) << "DirectCallerClient: Queuing additional address " << ip << ":" << port;
+        pending_ip_   = ip;
+        pending_port_ = port;
         return;
     }
 
-    call_started_ = true;
-    APP_LOG(AS_INFO) << "DirectCallerClient: Attempting connection to address " << ip << ":" << port;
-    std::thread([this, ip, port] { initiateWebRTCCall(ip, port); }).detach();
+    bool is_private = is_private_ip(ip);
+
+    if (is_private) {
+        // Prefer immediate connect for LAN addresses.
+        call_started_ = true;
+        APP_LOG(AS_INFO) << "DirectCallerClient: Detected private address – dialing immediately " << ip << ":" << port;
+        std::thread([this, ip, port] { initiateWebRTCCall(ip, port); }).detach();
+        return;
+    }
+
+    // First address is public – remember it and wait briefly for a possible private one.
+    APP_LOG(AS_INFO) << "DirectCallerClient: Received public address first, will wait 400 ms for LAN alternative.";
+    pending_ip_   = ip;
+    pending_port_ = port;
+
+    std::thread([this]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(400));
+        if (!call_started_.load() && !pending_ip_.empty()) {
+            call_started_ = true;
+            std::string ip_to_dial  = pending_ip_;
+            int         port_to_dial = pending_port_;
+            pending_ip_.clear();
+            pending_port_ = 0;
+            APP_LOG(AS_INFO) << "DirectCallerClient: Fallback to public address after wait " << ip_to_dial << ":" << port_to_dial;
+            std::thread([this, ip_to_dial, port_to_dial] { initiateWebRTCCall(ip_to_dial, port_to_dial); }).detach();
+        }
+    }).detach();
 }
 
 bool DirectCallerClient::initiateWebRTCCall(const std::string& ip, int port) {
@@ -202,7 +237,20 @@ bool DirectCallerClient::initiateWebRTCCall(const std::string& ip, int port) {
     if (!DirectCaller::Connect(ip.c_str(), port)) {
         APP_LOG(AS_ERROR) << "Connect to " << ip << ':' << port << " failed";
 
-        // Ask the signalling server for fresh address info.
+        // If we have a queued fallback address, try it right away.
+        if (!pending_ip_.empty()) {
+            std::string fallback_ip  = pending_ip_;
+            int         fallback_prt = pending_port_;
+            pending_ip_.clear();
+            pending_port_ = 0;
+
+            APP_LOG(AS_INFO) << "DirectCallerClient: Attempting fallback address " << fallback_ip << ":" << fallback_prt;
+            // Note: keep call_started_ true – we are still in dialing phase.
+            std::thread([this, fallback_ip, fallback_prt] { initiateWebRTCCall(fallback_ip, fallback_prt); }).detach();
+            return false;
+        }
+
+        // No queued fallback → ask the signalling server for fresh address info.
         if (signaling_client_) {
             APP_LOG(AS_INFO) << "Re-sending HELLO to request updated address";
             signaling_client_->sendHelloToUser(opts_.target_name);
@@ -511,16 +559,19 @@ void DirectCalleeClient::publishAddressToSignalingServer() {
     }
 
     if (stun_ok) {
-        // Advertise the public endpoint first so remote peers try it.
-        APP_LOG(AS_INFO) << "STUN discovered public endpoint " << pubIp << ":" << pubPort;
-        signaling_client_->sendAddress(opts_.user_name, pubIp, static_cast<int>(pubPort));
+        // Advertise the LAN endpoint first so that peers on the same private
+        // network can connect without going through the public Internet or a
+        // relay.  After a short delay, publish the STUN-discovered public
+        // address as a fallback for peers outside the LAN.
 
-        // After a short delay, publish the LAN address as a *secondary* option
-        // for peers that might share the same subnet.  We choose a delay long
-        // enough for the caller to process the first ADDRESS and begin its
-        // connection attempt before seeing the fallback.
-        signaling_thread()->PostDelayedTask([this, lan_ip]() {
-            signaling_client_->sendAddress(opts_.user_name, lan_ip, local_port_);
+        APP_LOG(AS_INFO) << "STUN discovered public endpoint " << pubIp << ":" << pubPort;
+
+        // 1) Private/LAN address immediately
+        signaling_client_->sendAddress(opts_.user_name, lan_ip, local_port_);
+
+        // 2) Public address a bit later so external peers still learn it.
+        signaling_thread()->PostDelayedTask([this, pubIp, pubPort]() {
+            signaling_client_->sendAddress(opts_.user_name, pubIp, static_cast<int>(pubPort));
         }, webrtc::TimeDelta::Millis(400));
     } else {
         // STUN failed → fall back to LAN only

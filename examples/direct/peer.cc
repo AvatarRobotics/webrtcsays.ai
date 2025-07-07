@@ -80,22 +80,10 @@ void DirectPeer::Start() {
   // Reset the closed event before starting a new connection attempt
   ResetConnectionClosedEvent();
   
-  // Set a timeout to automatically fail the connection if it takes too long
-  main_thread()->PostDelayedTask([this]() {
-    if (connection_closed_event_.Wait(webrtc::TimeDelta::Zero())) {
-      // Connection already closed, nothing to do
-      return;
-    }
-    
-    // Check if we're still in a connecting state after timeout
-    if (peer_connection_ && 
-        peer_connection_->ice_connection_state() != webrtc::PeerConnectionInterface::kIceConnectionConnected &&
-        peer_connection_->ice_connection_state() != webrtc::PeerConnectionInterface::kIceConnectionCompleted) {
-      RTC_LOG(LS_WARNING) << "Connection timeout after 30 seconds. Current ICE state: " 
-                          << static_cast<int>(peer_connection_->ice_connection_state());
-      connection_closed_event_.Set(); // Signal timeout
-    }
-  }, webrtc::TimeDelta::Seconds(30)); // 30 second timeout
+  // Removed the 30-second timeout watchdog – some networks may legitimately
+  // need longer to finish ICE checks or STUN/TURN negotiations.  The session
+  // will now stay in the "checking" state until the peer-connection itself
+  // reports success or failure.
 
   signaling_thread()->PostTask([this]() {
 
