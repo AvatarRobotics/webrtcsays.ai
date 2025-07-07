@@ -170,6 +170,8 @@ void DirectPeer::Start() {
                             return;
                         }
                         RTC_LOG(LS_INFO) << "Local description set successfully";
+                        // Now that both descriptions may be in place, process any queued ICE candidates.
+                        DrainPendingIceCandidates();
                         SendMessage(std::string("OFFER:") + sdp);
                     });
 
@@ -243,13 +245,21 @@ void DirectPeer::HandleMessage(rtc::AsyncPacketSocket* socket,
         RTC_LOG(LS_ERROR) << "Invalid SDP answer received";
 
    } else if (message.find("ICE:") == 0) {
-     std::string candidate = message.substr(4);
-      if (!candidate.empty()) {
-          RTC_LOG(LS_INFO) << "Received ICE candidate: " << candidate;
-          AddIceCandidate(candidate);
+      std::string payload = message.substr(4);
+      size_t delim = payload.find(':');
+      if (delim == std::string::npos) {
+          RTC_LOG(LS_ERROR) << "Malformed ICE payload received: " << payload;
       } else {
-          RTC_LOG(LS_ERROR) << "Invalid ICE candidate received";
-      }      
+          int mline_index = atoi(payload.substr(0, delim).c_str());
+          std::string candidate = payload.substr(delim + 1);
+          if (!candidate.empty()) {
+              RTC_LOG(LS_INFO) << "Received ICE candidate (mline=" << mline_index << ") " << candidate;
+              AddIceCandidate(candidate, mline_index);
+          } else {
+              RTC_LOG(LS_ERROR) << "Invalid ICE candidate received (empty string)";
+          }
+      }
+      
    } else {
        DirectApplication::HandleMessage(socket, message, remote_addr);
    }
@@ -267,18 +277,21 @@ void DirectPeer::OnIceCandidate(const webrtc::IceCandidateInterface* candidate) 
         return;
     }
 
+    int mline_index = candidate->sdp_mline_index();
+
     RTC_LOG(LS_INFO) << "New ICE candidate: " << sdp 
                      << " mid: " << candidate->sdp_mid()
-                     << " mlineindex: " << candidate->sdp_mline_index();
+                     << " mlineindex: " << mline_index;
     
     // Only send ICE candidates after local description is set
     if (!peer_connection_->local_description()) {
         RTC_LOG(LS_INFO) << "Queuing ICE candidate until local description is set";
-        pending_ice_candidates_.push_back(sdp);
+        pending_ice_candidates_.push_back({mline_index, sdp});
         return;
     }
-    
-    SendMessage("ICE:" + sdp);
+
+    // Send as ICE:<mline_idx>:<candidate>
+    SendMessage("ICE:" + std::to_string(mline_index) + ":" + sdp);
 }
 
 void DirectPeer::SetRemoteDescription(const std::string& sdp) {
@@ -311,6 +324,8 @@ void DirectPeer::SetRemoteDescription(const std::string& sdp) {
                     return;
                 }
                 RTC_LOG(LS_INFO) << "Remote description set successfully";
+                // Attempt to process any ICE candidates that arrived early.
+                DrainPendingIceCandidates();
                 auto transceivers = peer_connection()->GetTransceivers();
                 RTC_DCHECK(transceivers.size() > 0);
                 auto transceiver = transceivers[0];
@@ -417,6 +432,8 @@ void DirectPeer::SetRemoteDescription(const std::string& sdp) {
                                         return;
                                     }
                                     RTC_LOG(LS_INFO) << "Local description set successfully";
+                                    // Both descriptions should now be set on callee side as well.
+                                    DrainPendingIceCandidates();
                                     SendMessage(std::string("ANSWER:") + sdp);
                             });
 
@@ -432,24 +449,24 @@ void DirectPeer::SetRemoteDescription(const std::string& sdp) {
     });
 }
 
-void DirectPeer::AddIceCandidate(const std::string& candidate_sdp) {
-    signaling_thread()->PostTask([this, candidate_sdp]() {
-        // Simply queue if descriptions aren't ready
+void DirectPeer::AddIceCandidate(const std::string& candidate_sdp, int mline_index) {
+    signaling_thread()->PostTask([this, candidate_sdp, mline_index]() {
+        // Queue if descriptions aren't ready yet
         if (!peer_connection_->remote_description() || !peer_connection_->local_description()) {
             RTC_LOG(LS_INFO) << "Queuing ICE candidate - descriptions not ready";
-            pending_ice_candidates_.push_back(candidate_sdp);
+            pending_ice_candidates_.push_back({mline_index, candidate_sdp});
             return;
         }
 
         webrtc::SdpParseError error;
         std::unique_ptr<webrtc::IceCandidateInterface> candidate(
-            webrtc::CreateIceCandidate("0", 0, candidate_sdp, &error));
+            webrtc::CreateIceCandidate(std::to_string(mline_index), mline_index, candidate_sdp, &error));
         if (!candidate) {
             RTC_LOG(LS_ERROR) << "Failed to parse ICE candidate: " << error.description;
             return;
         }
 
-        RTC_LOG(LS_INFO) << "Adding ICE candidate";
+        RTC_LOG(LS_INFO) << "Adding ICE candidate (mline=" << mline_index << ")";
         peer_connection_->AddIceCandidate(candidate.get());
     });
 }
@@ -532,4 +549,37 @@ bool DirectPeer::WaitUntilConnectionClosed(int give_up_after_ms) {
 // Method to reset the event before a new connection attempt
 void DirectPeer::ResetConnectionClosedEvent() {
     connection_closed_event_.Reset();
+}
+
+// Process any ICE candidates that were received before both the local and
+// remote session descriptions were available.  This ensures that early
+// candidates are not lost and ICE can proceed once the SDP handshake
+// completes.
+void DirectPeer::DrainPendingIceCandidates() {
+    if (!peer_connection_) {
+        return;
+    }
+
+    // Both descriptions must be present before we can add candidates.
+    if (!peer_connection_->remote_description() || !peer_connection_->local_description()) {
+        return;
+    }
+
+    for (const auto& item : pending_ice_candidates_) {
+        int mline_index = item.first;
+        const std::string& candidate_sdp = item.second;
+
+        webrtc::SdpParseError error;
+        std::unique_ptr<webrtc::IceCandidateInterface> candidate(
+            webrtc::CreateIceCandidate(std::to_string(mline_index), mline_index, candidate_sdp, &error));
+        if (!candidate) {
+            RTC_LOG(LS_ERROR) << "Failed to parse queued ICE candidate: " << error.description;
+            continue;
+        }
+
+        RTC_LOG(LS_INFO) << "Adding previously queued ICE candidate (mline=" << mline_index << ")";
+        peer_connection_->AddIceCandidate(candidate.get());
+    }
+
+    pending_ice_candidates_.clear();
 }

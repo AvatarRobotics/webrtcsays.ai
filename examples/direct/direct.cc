@@ -708,15 +708,15 @@ bool DirectApplication::CreatePeerConnection() {
       // END OF WARNING
   }
 
-  // Gather relay and/or server-reflexive candidates, but never host. Using
-  // kNoHost disables host candidates while still allowing both STUN (srflx)
-  // and TURN (relay) candidates. This permits direct public connections when
-  // possible and falls back to TURN if required, without being limited to
-  // relay-only which can fail when the TURN server disallows same-server
-  // hair-pin connections.
-  config.type = webrtc::PeerConnectionInterface::kNoHost;  // srflx + relay, no host
+  // If a TURN server is configured prefer relay-only candidates. Otherwise
+  // gather *only* server-reflexive candidates (skip host) so that peers won't
+  // choose unroutable 192.168./10./172.* addresses even after an ICE restart.
+  if (opts_.turns.empty())
+    config.type = webrtc::PeerConnectionInterface::kNoHost;   // srflx only
+  else
+    config.type = webrtc::PeerConnectionInterface::kRelay;
 
-  // Only set essential ICE configs
+    // Only set essential ICE configs
   config.bundle_policy = webrtc::PeerConnectionInterface::kBundlePolicyMaxBundle;
   config.rtcp_mux_policy = webrtc::PeerConnectionInterface::kRtcpMuxPolicyRequire;
   

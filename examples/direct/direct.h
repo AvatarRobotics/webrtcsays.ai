@@ -18,6 +18,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <utility>
 #include <atomic>
 #include <functional>
 #include <chrono>
@@ -421,13 +422,18 @@ class DIRECT_API DirectPeer : public DirectApplication {
 
   // Session description methods
   void SetRemoteDescription(const std::string& sdp);
-  void AddIceCandidate(const std::string& candidate_sdp);
+  void AddIceCandidate(const std::string& candidate_sdp, int mline_index);
 
+  // Drain any ICE candidates that were received before both local and remote
+  // descriptions became available.
+  void DrainPendingIceCandidates();
+ 
   rtc::scoped_refptr<webrtc::AudioTrackInterface> audio_track_;
 
  private:
-  // ICE candidates that arrive before descriptions are set
-  std::vector<std::string> pending_ice_candidates_;
+  // ICE candidates that arrive before both local and remote descriptions are
+  // set.  Each entry stores {mline_index, candidate_sdp}.
+  std::vector<std::pair<int, std::string>> pending_ice_candidates_;
 
   // Observers are kept in members to extend their lifetime
   rtc::scoped_refptr<LambdaCreateSessionDescriptionObserver> create_session_observer_;
