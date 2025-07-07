@@ -708,13 +708,14 @@ bool DirectApplication::CreatePeerConnection() {
       // END OF WARNING
   }
 
-  // If a TURN server is configured prefer relay-only candidates. Otherwise
-  // gather *only* server-reflexive candidates (skip host) so that peers won't
-  // choose unroutable 192.168./10./172.* addresses even after an ICE restart.
-  if (opts_.turns.empty())
-    config.type = webrtc::PeerConnectionInterface::kNoHost;   // srflx only
-  else
-    config.type = webrtc::PeerConnectionInterface::kRelay;
+  // Gather relay and/or server-reflexive candidates, but never host. Using
+  // kNoHost disables host candidates while still allowing both STUN (srflx)
+  // and TURN (relay) candidates. This permits direct public connections when
+  // possible and falls back to TURN if required, without being limited to
+  // relay-only which can fail when the TURN server disallows same-server
+  // hair-pin connections.
+  config.type = webrtc::PeerConnectionInterface::kNoHost;  // srflx + relay, no host
+
   // Only set essential ICE configs
   config.bundle_policy = webrtc::PeerConnectionInterface::kBundlePolicyMaxBundle;
   config.rtcp_mux_policy = webrtc::PeerConnectionInterface::kRtcpMuxPolicyRequire;
@@ -730,17 +731,22 @@ bool DirectApplication::CreatePeerConnection() {
   std::vector<cricket::RelayServerConfig> turn_servers;
 
   if(opts_.turns.size()) {
-   std::vector<std::string> turnsParams = stringSplit(opts_.turns, ",");
-   if(turnsParams.size() == 3) {
-      webrtc::PeerConnectionInterface::IceServer iceServer;
-      iceServer.uri = turnsParams[0];
-      iceServer.username = turnsParams[1];
-      iceServer.password = turnsParams[2];
-      // Avoid certificate validation failures on minimal Linux images that
-      // lack the full CA bundle by disabling TLS cert checks.  TURN
-      // connections are still authenticated via long-term credentials.
-      iceServer.tls_cert_policy = webrtc::PeerConnectionInterface::kTlsCertPolicyInsecureNoCheck;
-      config.servers.push_back(iceServer);
+    // Support multiple TURN server definitions separated by ';' (produced when
+    // JSON config used an array). Each element keeps the original
+    // "uri,username,password" triple.
+    std::vector<std::string> server_entries = stringSplit(opts_.turns, ";");
+    for(const auto& entry : server_entries) {
+        std::vector<std::string> turnsParams = stringSplit(entry, ",");
+        if(turnsParams.size() != 3) {
+            RTC_LOG(LS_WARNING) << "TURN entry has " << turnsParams.size() << " segments, expected 3 – skipped: " << entry;
+            continue;
+        }
+        webrtc::PeerConnectionInterface::IceServer iceServer;
+        iceServer.uri = turnsParams[0];
+        iceServer.username = turnsParams[1];
+        iceServer.password = turnsParams[2];
+        iceServer.tls_cert_policy = webrtc::PeerConnectionInterface::kTlsCertPolicyInsecureNoCheck;
+        config.servers.push_back(iceServer);
     }
   }
 

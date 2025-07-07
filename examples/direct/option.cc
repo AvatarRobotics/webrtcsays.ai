@@ -251,9 +251,32 @@ Options parseOptions(const std::vector<std::string>& args) {
              RTC_LOG(LS_INFO) << "Config address: " << config_json["address"].asString(); // Log value
              opts.address = config_json["address"].asString();
         }
-        if (config_json.isMember("turns") && config_json["turns"].isString()) {
-             RTC_LOG(LS_INFO) << "Config has turns params";
-             opts.turns = config_json["turns"].asString();
+        if (config_json.isMember("turns")) {
+            const Json::Value& t = config_json["turns"];
+            if (t.isString()) {
+                // Simple string "turn:host:port,user,pass"
+                RTC_LOG(LS_INFO) << "Config has turns params (string)";
+                opts.turns = t.asString();
+            } else if (t.isArray()) {
+                // Expect [ uri, username, password ]
+                if (t.size() >= 3 && t[0].isString() && t[1].isString() && t[2].isString()) {
+                    std::string joined;
+                    for (Json::ArrayIndex i = 0; i < t.size(); ++i) {
+                        if (!t[i].isString()) {
+                            RTC_LOG(LS_WARNING) << "turns array element " << i << " is not string – skipping";
+                            continue;
+                        }
+                        if (!joined.empty()) joined += ";";
+                        joined += t[i].asString();
+                    }
+                    opts.turns = joined;
+                    RTC_LOG(LS_INFO) << "Config turns array joined to: " << opts.turns;
+                } else {
+                    RTC_LOG(LS_WARNING) << "`turns` array has unexpected structure; expecting at least 3 string elements (uri, user, pass). Ignored.";
+                }
+            } else {
+                RTC_LOG(LS_WARNING) << "`turns` is neither string nor array – ignored";
+            }
         }
         if (config_json.isMember("vpn") && config_json["vpn"].isString()) {
              RTC_LOG(LS_INFO) << "Config vpn: " << config_json["vpn"].asString(); // Log value
