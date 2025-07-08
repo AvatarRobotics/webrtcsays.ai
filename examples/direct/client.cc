@@ -32,7 +32,7 @@ DirectCallerClient::DirectCallerClient(const Options& opts)
     signaling_client_ = std::make_unique<DirectClient>(opts.user_name);
     // Busy when caller already in an active call
     signaling_client_->setIsBusyCallback([this]() {
-        return this->peer_connection() != nullptr;
+        return (this->peer_connection() != nullptr) || (this->tcp_socket_ != nullptr);
     });
 }
 
@@ -374,7 +374,8 @@ DirectCalleeClient::DirectCalleeClient(const Options& opts)
     signaling_client_ = std::make_unique<DirectClient>(opts.user_name);
     // Provide busy predicate: callee is busy while a PeerConnection exists
     signaling_client_->setIsBusyCallback([this]() {
-        return this->peer_connection() != nullptr;
+        // Busy if we already have an established or pending PeerConnection or an open TCP socket
+        return (this->peer_connection() != nullptr) || (this->tcp_socket_ != nullptr);
     });
 }
 
