@@ -551,6 +551,30 @@ void DirectCalleeClient::publishAddressToSignalingServer() {
     std::string pubIp;
     uint16_t   pubPort = 0;
     int tmp_sock = ::socket(AF_INET, SOCK_DGRAM, 0);
+    // Bind the temporary UDP socket to the same local_port_ that the TCP
+    // listener is using.  That way the NAT mapping we discover via STUN is
+    // for **exactly** the 5-tuple (public IP, public *port*) that an incoming
+    // caller will later try to reach with a TCP SYN.  On many consumer NAT
+    // routers the port number is preserved across protocols when the private
+    // side also uses that port, which gives us a much better chance that the
+    // TCP connection will succeed without manual port-forwarding.
+    //
+    // If the bind() fails (e.g. because another UDP socket already occupies
+    // the port) we simply fall back to letting the OS pick any free UDP port
+    // – the worst case behaviour is the same as before this patch.
+    if (tmp_sock >= 0 && local_port_ != 0) {
+        sockaddr_in bind_addr = {};
+        bind_addr.sin_family      = AF_INET;
+        bind_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        bind_addr.sin_port        = htons(static_cast<uint16_t>(local_port_));
+
+        if (::bind(tmp_sock, reinterpret_cast<sockaddr*>(&bind_addr), sizeof(bind_addr)) != 0) {
+            RTC_LOG(LS_WARNING) << "STUN helper: unable to bind UDP socket to port "
+                                << local_port_ << ", falling back to ephemeral port (errno="
+                                << errno << ")";
+        }
+    }
+
     bool stun_ok = false;
     if (tmp_sock >= 0) {
         stun_ok = stun_discover(tmp_sock, "stun.l.google.com", 19302,
