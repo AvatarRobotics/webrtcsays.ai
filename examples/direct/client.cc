@@ -96,6 +96,80 @@ bool DirectCallerClient::Connect() {
     // Request initial user list
     signaling_client_->requestUserList();
 
+    // Advertise our best local/public IPv4 so the signaling server contains
+    // a realistic entry for this client. Although the callee normally
+    // connects back to us only over WebRTC, some server implementations
+    // insist on having a non-placeholder ADDRESS before they forward HELLO.
+
+    // First try STUN to discover our public endpoint
+    std::string pub_ip;
+    uint16_t    pub_port = 0;
+    bool        stun_ok  = false;
+    int tmp_sock = ::socket(AF_INET, SOCK_DGRAM, 0);
+    if (tmp_sock >= 0) {
+        stun_ok = stun_discover(tmp_sock, "stun.l.google.com", 19302,
+                                  pub_ip, pub_port);
+        ::close(tmp_sock);
+    }
+
+    std::string ip_to_send;
+    int         port_to_send = 0;
+
+    if (stun_ok) {
+        ip_to_send   = pub_ip;
+        port_to_send = static_cast<int>(pub_port);
+    } else {
+        // Fallback to best local/non-loopback IP
+        auto choose_best_ip = []() -> std::string {
+            auto is_private_ip = [](const std::string& addr) {
+                return addr.rfind("10.", 0) == 0 ||
+                       addr.rfind("192.168.", 0) == 0 ||
+                       std::regex_match(addr, std::regex(R"(^172\.(1[6-9]|2[0-9]|3[01])\.)"));
+            };
+
+            std::string private_ip;
+            std::string first_non_loopback;
+
+#if !defined(_WIN32)
+            struct ifaddrs* ifaddr = nullptr;
+            if (getifaddrs(&ifaddr) == 0) {
+                for (struct ifaddrs* ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
+                    if (!ifa->ifa_addr || !(ifa->ifa_flags & IFF_UP))
+                        continue;
+                    if (ifa->ifa_addr->sa_family != AF_INET)
+                        continue;
+
+                    char ip[INET_ADDRSTRLEN];
+                    if (!inet_ntop(AF_INET, &((struct sockaddr_in*)ifa->ifa_addr)->sin_addr, ip, sizeof(ip)))
+                        continue;
+
+                    std::string candidate(ip);
+                    if (candidate == "127.0.0.1")
+                        continue;
+
+                    if (first_non_loopback.empty())
+                        first_non_loopback = candidate;
+
+                    if (is_private_ip(candidate)) {
+                        private_ip = candidate;
+                        break;
+                    }
+                }
+                freeifaddrs(ifaddr);
+            }
+#endif // !_WIN32
+
+            if (!private_ip.empty()) return private_ip;
+            if (!first_non_loopback.empty()) return first_non_loopback;
+            return "127.0.0.1";
+        };
+
+        ip_to_send = choose_best_ip();
+        port_to_send = 0; // no listening socket
+    }
+
+    signaling_client_->sendAddress(opts_.user_name, ip_to_send, port_to_send);
+
     // Immediately attempt to contact the target if one is specified. This is
     // important when using the lightweight raw-WebSocket signaling path which
     // currently does not broadcast explicit "peer-joined" events. By reusing
@@ -177,10 +251,10 @@ void DirectCallerClient::onPeerAddressResolved(const std::string& peer_id,
                                                int port) {
 
     auto is_private_ip = [](const std::string& addr) {
-        // Quick check for RFC1918 ranges 10.0.0.0/8 , 172.16.0.0/12 , 192.168.0.0/16
         return addr.rfind("10.",   0)   == 0 ||
-               addr.rfind("192.168.", 0) == 0 ||
-               std::regex_match(addr, std::regex(R"(^172\.(1[6-9]|2[0-9]|3[01])\.)"));
+                addr.rfind("192.168.", 0) == 0 ||
+                addr.rfind("127.", 0) == 0 ||
+                std::regex_match(addr, std::regex(R"(^172\.(1[6-9]|2[0-9]|3[01])\.)"));
     };
 
     // Only act on the target user (if specified)
@@ -497,110 +571,63 @@ void DirectCalleeClient::publishAddressToSignalingServer() {
         return;
     }
 
-    // Discover first non-loopback IPv4 address
-    std::string lan_ip = "127.0.0.1";
+    // Discover the best IPv4 address to advertise.
+    // Prefer RFC1918 private addresses (10/172.16-31/192.168) when available
+    // so that peers on the same LAN can connect directly.  Fall back to the
+    // first non-loopback address, and ultimately to 127.0.0.1 when running
+    // both caller and callee on the same host.
 
-#ifdef __APPLE__
-    char hostname[256];
-    if (gethostname(hostname, sizeof(hostname)) == 0) {
-        struct addrinfo hints = {};
-        hints.ai_family = AF_INET; // IPv4 only
-        hints.ai_socktype = SOCK_STREAM;
-        struct addrinfo* info = nullptr;
-        if (getaddrinfo(hostname, nullptr, &hints, &info) == 0) {
-            for (auto* p = info; p; p = p->ai_next) {
-                char ip[INET_ADDRSTRLEN];
-                void* addr_ptr = &((struct sockaddr_in*)p->ai_addr)->sin_addr;
-                if (inet_ntop(AF_INET, addr_ptr, ip, sizeof(ip))) {
-                    std::string candidate(ip);
-                    if (candidate != "127.0.0.1") {
-                        lan_ip = candidate;
-                        break;
-                    }
-                }
-            }
-            freeaddrinfo(info);
-        }
-    }
-#else  // Non-Apple (Linux, etc.)
-    // Extended discovery for non-Apple platforms
+    auto is_private_ip = [](const std::string& addr) {
+        return addr.rfind("10.", 0) == 0 ||
+               addr.rfind("192.168.", 0) == 0 ||
+               std::regex_match(addr, std::regex(R"(^172\.(1[6-9]|2[0-9]|3[01])\.)"));
+    };
+
+    std::string lan_ip = "127.0.0.1";           // default
+    std::string first_non_loopback;
+
 #if !defined(_WIN32)
     struct ifaddrs* ifaddr = nullptr;
     if (getifaddrs(&ifaddr) == 0) {
-        for (struct ifaddrs* ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
-            if (!ifa->ifa_addr || !(ifa->ifa_flags & IFF_UP) || (ifa->ifa_flags & IFF_LOOPBACK)) {
-                continue; // Skip down or loopback interfaces
-            }
+        for (struct ifaddrs* ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
+            if (!ifa->ifa_addr || !(ifa->ifa_flags & IFF_UP))
+                continue;
 
             if (ifa->ifa_addr->sa_family == AF_INET) {
                 char ip[INET_ADDRSTRLEN];
                 if (inet_ntop(AF_INET, &((struct sockaddr_in*)ifa->ifa_addr)->sin_addr, ip, sizeof(ip))) {
-                    lan_ip = ip;
-                    break; // Take the first suitable IPv4
+                    std::string candidate(ip);
+                    if (candidate == "127.0.0.1")
+                        continue; // loopback – keep as last resort
+
+                    if (is_private_ip(candidate)) {
+                        lan_ip = candidate;  // best choice
+                        break;
+                    }
+
+                    if (first_non_loopback.empty()) {
+                        first_non_loopback = candidate; // remember for fallback
+                    }
                 }
             }
         }
         freeifaddrs(ifaddr);
     }
-#endif // !_WIN32
-#endif // __APPLE__
+#endif // _WIN32
 
-    //------------------------------------------------------------------
-    // NEW: discover translated (public) port via STUN and advertise it.
-    //------------------------------------------------------------------
-    std::string pubIp;
-    uint16_t   pubPort = 0;
-    int tmp_sock = ::socket(AF_INET, SOCK_DGRAM, 0);
-    // Bind the temporary UDP socket to the same local_port_ that the TCP
-    // listener is using.  That way the NAT mapping we discover via STUN is
-    // for **exactly** the 5-tuple (public IP, public *port*) that an incoming
-    // caller will later try to reach with a TCP SYN.  On many consumer NAT
-    // routers the port number is preserved across protocols when the private
-    // side also uses that port, which gives us a much better chance that the
-    // TCP connection will succeed without manual port-forwarding.
-    //
-    // If the bind() fails (e.g. because another UDP socket already occupies
-    // the port) we simply fall back to letting the OS pick any free UDP port
-    // – the worst case behaviour is the same as before this patch.
-    if (tmp_sock >= 0 && local_port_ != 0) {
-        sockaddr_in bind_addr = {};
-        bind_addr.sin_family      = AF_INET;
-        bind_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-        bind_addr.sin_port        = htons(static_cast<uint16_t>(local_port_));
-
-        if (::bind(tmp_sock, reinterpret_cast<sockaddr*>(&bind_addr), sizeof(bind_addr)) != 0) {
-            RTC_LOG(LS_WARNING) << "STUN helper: unable to bind UDP socket to port "
-                                << local_port_ << ", falling back to ephemeral port (errno="
-                                << errno << ")";
-        }
+    // If no private IP found, use the first non-loopback one we saw.
+    if (lan_ip == "127.0.0.1" && !first_non_loopback.empty()) {
+        lan_ip = first_non_loopback;
     }
 
-    bool stun_ok = false;
-    if (tmp_sock >= 0) {
-        stun_ok = stun_discover(tmp_sock, "stun.l.google.com", 19302,
-                                 pubIp, pubPort);
-        ::close(tmp_sock);
-    }
+    // Advertise only the LAN address that corresponds to the TCP listener.
+    // Publishing the STUN‐derived (UDP) endpoint resulted in the caller
+    // attempting to establish a TCP connection on a port that is only open
+    // for UDP, yielding "connection refused" errors.  If you later add a
+    // TCP‐capable NAT traversal mechanism (e.g. RFC 6062, TURN over TCP),
+    // you can re-enable public address advertisement here.
 
-    if (stun_ok) {
-        // Advertise the LAN endpoint first so that peers on the same private
-        // network can connect without going through the public Internet or a
-        // relay.  After a short delay, publish the STUN-discovered public
-        // address as a fallback for peers outside the LAN.
-
-        APP_LOG(AS_INFO) << "STUN discovered public endpoint " << pubIp << ":" << pubPort;
-
-        // 1) Private/LAN address immediately
-        signaling_client_->sendAddress(opts_.user_name, lan_ip, local_port_);
-
-        // 2) Public address a bit later so external peers still learn it.
-        signaling_thread()->PostDelayedTask([this, pubIp, pubPort]() {
-            signaling_client_->sendAddress(opts_.user_name, pubIp, static_cast<int>(pubPort));
-        }, webrtc::TimeDelta::Millis(400));
-    } else {
-        // STUN failed → fall back to LAN only
-        signaling_client_->sendAddress(opts_.user_name, lan_ip, local_port_);
-    }
+    signaling_client_->sendAddress(opts_.user_name, lan_ip, local_port_);
 }
 
 void DirectCalleeClient::onIncomingCall(const std::string& peer_id, const std::string& sdp) {
