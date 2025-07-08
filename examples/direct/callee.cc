@@ -289,8 +289,10 @@ void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
     OnCancel(socket);
   } else {
     // Forward other messages to default handler
-    if (len >= 1 && memcmp(data, Msg::kHello, std::min<size_t>(len, sizeof(Msg::kHello)-1)) != 0) {
-      // Unrecognized initial request – respond with Bad Request once.
+    // Send 400 Bad Request only for truly unrecognized first-line messages
+    if (len >= 1 && memcmp(data, Msg::kHello, std::min<size_t>(len, sizeof(Msg::kHello)-1)) != 0 &&
+        !(len >= sizeof(Msg::kInvite) -1 && memcmp(data, Msg::kInvite, sizeof(Msg::kInvite)-1) == 0) &&
+        !(len >= sizeof(Msg::kInvitePrefix) -1 && memcmp(data, Msg::kInvitePrefix, sizeof(Msg::kInvitePrefix)-1) == 0)) {
       SendMessage(StatusCodes::kBadRequest);
     }
     std::string message;

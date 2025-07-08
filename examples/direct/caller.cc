@@ -21,6 +21,7 @@
 #include <chrono>
 #include <thread>
 #include <sstream> // Added for building INIT JSON
+#include <filesystem> // For filename extraction
 #include <api/units/time_delta.h> // For webrtc::TimeDelta
 
 #include "direct.h"
@@ -209,10 +210,12 @@ void DirectCaller::OnMessage(rtc::AsyncPacketSocket* socket,
         oss << ",\"encryption\":" << (opts_.encryption ? "true" : "false");
         oss << ",\"video\":" << (opts_.video ? "true" : "false");
         if (!opts_.llama_model.empty()) {
-            oss << ",\"llama_model\":\"" << opts_.llama_model << "\"";
+            std::string llama_name = std::filesystem::path(opts_.llama_model).filename().string();
+            oss << ",\"llama_model\":\"" << llama_name << "\"";
         }
         if (!opts_.llava_mmproj.empty()) {
-            oss << ",\"llava_mmproj\":\"" << opts_.llava_mmproj << "\"";
+            std::string mmproj_name = std::filesystem::path(opts_.llava_mmproj).filename().string();
+            oss << ",\"llava_mmproj\":\"" << mmproj_name << "\"";
         }
         if (!opts_.room_name.empty()) {
             oss << ",\"room_name\":\"" << opts_.room_name << "\"";
