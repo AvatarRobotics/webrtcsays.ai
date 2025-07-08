@@ -855,18 +855,8 @@ void DirectClient::handleProtocolMessage(const std::string& message) {
         } else {
             APP_LOG(AS_WARNING) << "ADDRESS message malformed: " << message;
         }
-    } else if (message.rfind("USERS", 0) == 0) {
-        // Format accepted:
-        //   "USERS:user1,user2"  (preferred)
-        //   "USERS user1,user2"  (legacy – without colon)
-        size_t delimiter = message.find_first_of(": ");
-        std::string user_list_str;
-        if (delimiter != std::string::npos) {
-            user_list_str = message.substr(delimiter + 1);
-        } else {
-            // No delimiter – nothing to parse
-            user_list_str = "";
-        }
+    } else if (message.rfind("USERS:", 0) == 0) {
+        // Format: USERS:user1,user2,user3
         std::vector<std::string> users;
         std::stringstream ss(user_list_str);
         std::string user;

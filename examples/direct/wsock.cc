@@ -24,6 +24,7 @@ WebSocketClient::WebSocketClient()
       connected_(false),
       read_in_progress_(false),
       allow_reconnect_(true),
+      reconnect_attempts_(0),
       network_thread_(nullptr) {
   // Initialize OpenSSL
   SSL_library_init();
@@ -62,6 +63,7 @@ bool WebSocketClient::connect(const Config& config) {
   }
 
   connected_ = true;
+  reconnect_attempts_ = 0; // reset counter on successful connection
   return true;
 }
 
@@ -947,23 +949,53 @@ void WebSocketClient::attempt_reconnect() {
     APP_LOG(AS_INFO) << "WebSocketClient: Reconnect aborted – not allowed after disconnect.";
     return;
   }
-  APP_LOG(AS_INFO) << "WebSocketClient: Attempting to reconnect";
+  // Limit the number of successive reconnect attempts to avoid infinite loops
+  int current_attempt = ++reconnect_attempts_;
+  if (current_attempt > kMaxReconnectAttempts) {
+    APP_LOG(AS_ERROR) << "WebSocketClient: Reached maximum reconnect attempts (" << kMaxReconnectAttempts << "), giving up.";
+    allow_reconnect_ = false;
+    if (message_callback_) {
+      message_callback_("RECONNECT_FAILED");
+    }
+    return;
+  }
+
+  // Apply simple linear back-off: wait current_attempt * 2 seconds (capped below)
+  int backoff_seconds = std::min(current_attempt * 2, 30); // cap to 30 s
+  if (current_attempt > 1) {
+    APP_LOG(AS_INFO) << "WebSocketClient: Reconnect attempt " << current_attempt << " will start in " << backoff_seconds << " seconds";
+  }
+
+  // Schedule the actual reconnect logic on the network thread after back-off delay
+  if (network_thread_) {
+    auto self = shared_from_this();
+    network_thread_->PostDelayedTask([self]() {
+      self->attempt_reconnect_internal();
+    }, webrtc::TimeDelta::Seconds(backoff_seconds));
+  }
+}
+
+// Helper containing the original reconnect logic – invoked after back-off
+void WebSocketClient::attempt_reconnect_internal() {
+  APP_LOG(AS_INFO) << "WebSocketClient: Attempting to reconnect (attempt " << reconnect_attempts_.load() << ")";
   cleanup_connection();
   
   if (connect(config_)) {
     APP_LOG(AS_INFO) << "WebSocketClient: Reconnected successfully";
     start_listening();
 
+    // Reset attempts counter so future disconnects get a fresh budget
+    reconnect_attempts_ = 0;
+
     // Notify owner that connection is alive again so it can re-register.
     if (reconnect_callback_) {
       reconnect_callback_();
     }
   } else {
-    APP_LOG(AS_ERROR) << "WebSocketClient: Reconnect failed, retrying in 2 seconds";
+    APP_LOG(AS_ERROR) << "WebSocketClient: Reconnect failed, scheduling another attempt";
     if (network_thread_) {
       auto self = shared_from_this();
-      network_thread_->PostDelayedTask([self]() { self->attempt_reconnect(); },
-                                       webrtc::TimeDelta::Seconds(2));
+      network_thread_->PostTask([self]() { self->attempt_reconnect(); });
     }
   }
 }

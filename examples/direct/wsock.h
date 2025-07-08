@@ -30,6 +30,7 @@
 #include <map>
 #include <mutex>
 #include <random>
+#include <algorithm>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -96,6 +97,11 @@ private:
     // If set to false (e.g., after disconnect()), no further reconnect attempts will be made.
     std::atomic<bool> allow_reconnect_;
 
+    // Track how many successive reconnect attempts have been made without success
+    std::atomic<int> reconnect_attempts_{0};
+    // Maximum number of successive reconnect attempts before giving up
+    static constexpr int kMaxReconnectAttempts = 10;
+
     // Configuration
     Config config_;
     rtc::Thread* network_thread_;
@@ -128,6 +134,7 @@ private:
     void async_read();
     void force_sync_read(int timeout_ms = 5000);
     void attempt_reconnect();
+    void attempt_reconnect_internal();
 
     // Utility methods
     void cleanup_connection();
