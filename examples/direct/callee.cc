@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "direct.h"
+#include "status.h"
 
 #if TARGET_OS_IOS || TARGET_OS_OSX
 #include "bonjour.h"
@@ -264,9 +265,23 @@ void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
 
   // Use prefix match to be tolerant of combined packets
   if (len >= 5 && memcmp(data, "HELLO", 5) == 0) {
-    SendMessage("WELCOME");
+    // Determine callee state to pick correct status code
+    //  - 486 Busy Here: already in an active PeerConnection
+    //  - 200 OK: ready to accept call
+    //  - 480 Temporarily Unavailable: not currently listening (should not occur on this path)
+
+    if (peer_connection_) {
+      // We are already in a call – reject with Busy status.
+      SendMessage(StatusCodes::kBusyHere);
+    } else if (!listen_socket_) {
+      // Should not happen because we're handling a TCP connection, but keep for completeness.
+      SendMessage(StatusCodes::kTemporarilyUnavailable);
+    } else {
+      // Ready – acknowledge.
+      SendMessage(StatusCodes::kOk);
+    }
   } else if (len == 3 && memcmp(data, "BYE", 3) == 0) {
-    SendMessage("OK");
+    SendMessage(StatusCodes::kOk);
     // Skipping synchronous shutdown for BYE to avoid blocking
   } else if (len == 6 && memcmp(data, "CANCEL", 6) == 0) {
     RTC_LOG(LS_INFO) << "Received CANCEL from " << remote_addr.ToString()
@@ -274,6 +289,10 @@ void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
     OnCancel(socket);
   } else {
     // Forward other messages to default handler
+    if (len >= 1 && memcmp(data, "HELLO", std::min<size_t>(len,5)) != 0) {
+      // Unrecognized initial request – respond with Bad Request once.
+      SendMessage(StatusCodes::kBadRequest);
+    }
     std::string message;
     message.resize(len);
     memcpy(&message[0], data, len);
@@ -288,7 +307,7 @@ void DirectCallee::OnCancel(rtc::AsyncPacketSocket* socket) {
   }
 
   // Acknowledge the CANCEL so the caller proceeds to tear-down cleanly.
-  SendMessage("OK");
+  SendMessage(StatusCodes::kOk);
 
   // Gracefully shut down the active PeerConnection (if any) so we release all
   // WebRTC resources tied to the just-finished call, but keep the listening

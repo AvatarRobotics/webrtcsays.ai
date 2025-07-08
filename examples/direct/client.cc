@@ -18,6 +18,7 @@
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <regex>
+#include "status.h"
 
 // DirectCallerClient Implementation
 
@@ -764,7 +765,7 @@ bool DirectClient::isConnected() const { return connected_; }
 // Simple wrappers still required
 bool DirectClient::sendHelloToUser(const std::string& target_user_id) {
     if (!connected_) return false;
-    return ws_client_->send_message("HELLO:" + target_user_id);
+    return ws_client_->send_message(std::string(Msg::kHelloPrefix) + target_user_id);
 }
 
 bool DirectClient::requestUserList() {
@@ -792,7 +793,7 @@ bool DirectClient::sendIceCandidate(const std::string& target_peer_id, const std
 
 bool DirectClient::sendInit() {
     if (!connected_) return false;
-    return ws_client_->send_message("INIT");
+    return ws_client_->send_message(Msg::kInvite);
 }
 
 bool DirectClient::sendBye() {
@@ -802,7 +803,7 @@ bool DirectClient::sendBye() {
 
 bool DirectClient::sendCancel() {
     if (!connected_) return false;
-    return ws_client_->send_message("CANCEL");
+    return ws_client_->send_message(Msg::kCancel);
 }
 
 bool DirectClient::sendAddress(const std::string& user_id, const std::string& ip, int port) {
@@ -822,20 +823,20 @@ void DirectClient::disconnect() {
 bool DirectClient::startTcpServer(int) { return false; }
 
 void DirectClient::handleProtocolMessage(const std::string& message) {
-    if (message.rfind("HELLO:", 0) == 0) {
+    if (message.rfind(Msg::kHelloPrefix, 0) == 0) {
         APP_LOG(AS_INFO) << "DirectClient received targeted HELLO: " << message;
         // Targeted HELLO:HELLO:<user>
         std::string target = message.substr(6);
         if (target == user_id_) {
-            APP_LOG(AS_INFO) << "HELLO is for us, sending WELCOME";
-            ws_client_->send_message("WELCOME");
+            APP_LOG(AS_INFO) << "HELLO is for us, sending " << StatusCodes::kOk;
+            ws_client_->send_message(StatusCodes::kOk);
         }
-    } else if (message == "HELLO") {
-        APP_LOG(AS_INFO) << "DirectClient received generic HELLO, sending WELCOME";
-        ws_client_->send_message("WELCOME");
-    } else if (message == "INIT") {
-        APP_LOG(AS_INFO) << "DirectClient received INIT, sending WAITING";
-        ws_client_->send_message("WAITING");
+    } else if (message == Msg::kHello) {
+        APP_LOG(AS_INFO) << "DirectClient received generic HELLO, sending " << StatusCodes::kOk;
+        ws_client_->send_message(StatusCodes::kOk);
+    } else if (message == Msg::kInvite) {
+        APP_LOG(AS_INFO) << "DirectClient received " << Msg::kInvite << ", sending " << Msg::kWaiting;
+        ws_client_->send_message(Msg::kWaiting);
     } else if (message.rfind("ADDRESS:", 0) == 0) {
         // Format: ADDRESS:user_id:ip:port
         std::vector<std::string> parts;
@@ -856,7 +857,17 @@ void DirectClient::handleProtocolMessage(const std::string& message) {
             APP_LOG(AS_WARNING) << "ADDRESS message malformed: " << message;
         }
     } else if (message.rfind("USERS:", 0) == 0) {
-        // Format: USERS:user1,user2,user3
+        // Format accepted:
+        //   "USERS:user1,user2"  (preferred)
+        //   "USERS user1,user2"  (legacy – without colon)
+        size_t delimiter = message.find_first_of(": ");
+        std::string user_list_str;
+        if (delimiter != std::string::npos) {
+            user_list_str = message.substr(delimiter + 1);
+        } else {
+            // No delimiter – nothing to parse
+            user_list_str = "";
+        }
         std::vector<std::string> users;
         std::stringstream ss(user_list_str);
         std::string user;

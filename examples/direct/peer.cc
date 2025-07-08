@@ -28,6 +28,7 @@
 
 #include "direct.h"
 #include "video.h"
+#include "status.h"
 
 DirectPeer::DirectPeer(
     Options opts) 
@@ -170,7 +171,7 @@ void DirectPeer::Start() {
  
      } else {
         RTC_LOG(LS_INFO) << "Waiting for offer...";
-        SendMessage("WAITING");
+        SendMessage(Msg::kWaiting);
     }
  
   });
@@ -181,13 +182,14 @@ void DirectPeer::HandleMessage(rtc::AsyncPacketSocket* socket,
                              const std::string& message,
                              const rtc::SocketAddress& remote_addr) {
 
-   if (message.find("INIT") == 0) {
+   if (message.rfind(Msg::kInvite, 0) == 0) {
         // Default agent capability
         remote_agent_ = "audio";
 
-        // Parse optional JSON payload after "INIT:"
-        if (message.size() > 5 && message[4] == ':') {
-          std::string json = message.substr(5);
+        // Parse optional JSON payload after "INVITE:"
+        constexpr size_t kPrefixLen = sizeof(Msg::kInvite) - 1; // length of "INVITE"
+        if (message.size() > kPrefixLen + 1 && message[kPrefixLen] == ':') {
+          std::string json = message.substr(kPrefixLen + 1);
           size_t pos = json.find("\"agent\"");
           if (pos != std::string::npos) {
             pos = json.find(':', pos);
@@ -210,21 +212,21 @@ void DirectPeer::HandleMessage(rtc::AsyncPacketSocket* socket,
           RTC_LOG(LS_ERROR) << "Peer is not a callee, cannot init";
         }
 
-   } else if (message == "WAITING") {
+   } else if (message == Msg::kWaiting) {
         if (is_caller()) {
           Start();
         } else {
           RTC_LOG(LS_ERROR) << "Peer is not a caller, cannot wait";
         }
-   } else if (!is_caller() && message.find("OFFER:") == 0) {
-      std::string sdp = message.substr(6);  // Use exact length of "OFFER:"
+   } else if (!is_caller() && message.find(Msg::kOfferPrefix) == 0) {
+      std::string sdp = message.substr(sizeof(Msg::kOfferPrefix) - 1);  // Use exact length of "OFFER:"
       if(!sdp.empty()) {
         SetRemoteDescription(sdp);
       } else {
         RTC_LOG(LS_ERROR) << "Invalid SDP offer received";
       }
-   } else if (is_caller() && message.find("ANSWER:") == 0) {
-      std::string sdp = message.substr(7);
+   } else if (is_caller() && message.find(Msg::kAnswerPrefix) == 0) {
+      std::string sdp = message.substr(sizeof(Msg::kAnswerPrefix) - 1);
 
       // Got an ANSWER from the callee
       if(sdp.size())
@@ -232,8 +234,8 @@ void DirectPeer::HandleMessage(rtc::AsyncPacketSocket* socket,
       else
         RTC_LOG(LS_ERROR) << "Invalid SDP answer received";
 
-   } else if (message.find("ICE:") == 0) {
-      std::string payload = message.substr(4);
+   } else if (message.find(Msg::kIcePrefix) == 0) {
+      std::string payload = message.substr(sizeof(Msg::kIcePrefix) - 1);
       size_t delim = payload.find(':');
       if (delim == std::string::npos) {
           RTC_LOG(LS_ERROR) << "Malformed ICE payload received: " << payload;
@@ -279,7 +281,7 @@ void DirectPeer::OnIceCandidate(const webrtc::IceCandidateInterface* candidate) 
     }
 
     // Send as ICE:<mline_idx>:<candidate>
-    SendMessage("ICE:" + std::to_string(mline_index) + ":" + sdp);
+    SendMessage(std::string(Msg::kIcePrefix) + std::to_string(mline_index) + ":" + sdp);
 }
 
 void DirectPeer::SetRemoteDescription(const std::string& sdp) {

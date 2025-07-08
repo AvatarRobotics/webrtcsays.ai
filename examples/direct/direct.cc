@@ -37,6 +37,7 @@
 #include "direct.h"
 #include "option.h"
 #include "video.h"
+#include "status.h"
 
 // String split from option.cc
 std::vector<std::string> stringSplit(std::string input, std::string delimiter);
@@ -924,7 +925,7 @@ void DirectApplication::HandleMessage(rtc::AsyncPacketSocket* socket,
     // Send BYE when all exchanges are complete
     else if (sdp_fragments_received_ >= kMaxSdpFragments &&
              ice_candidates_received_ >= kMaxIceCandidates) {
-      SendMessage("BYE");
+      SendMessage(Msg::kBye);
     }
   } else if (message.find("LLAMA:") == 0) {
     std::string payload = message.substr(6);
@@ -954,7 +955,7 @@ void DirectApplication::HandleMessage(rtc::AsyncPacketSocket* socket,
     }
     RTC_LOG(LS_INFO) << "Whispering: [" << language << "] " << text;
     webrtc::SpeechAudioDeviceFactory::AskLlama(text, language);
-  } else if (message == "OK") {
+  } else if (message == StatusCodes::kOk) {
     ShutdownInternal();            // close PeerConnection
 
     if (tcp_socket_) {             // <-- NEW

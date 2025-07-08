@@ -24,6 +24,7 @@
 #include <api/units/time_delta.h> // For webrtc::TimeDelta
 
 #include "direct.h"
+#include "status.h"
 
 #if TARGET_OS_IOS || TARGET_OS_OSX
 #include "bonjour.h"
@@ -196,7 +197,7 @@ void DirectCaller::OnMessage(rtc::AsyncPacketSocket* socket,
     RTC_LOG(LS_INFO) << "Caller received: " << message;
 
     // Allow for cases where multiple messages arrive concatenated in one TCP chunk.
-    if (message.find("WELCOME") == 0) {
+    if (message.find(StatusCodes::kOk) == 0) {
         // Stop further HELLO retries – handshake completed successfully.
         welcome_received_ = true;
 
@@ -221,13 +222,30 @@ void DirectCaller::OnMessage(rtc::AsyncPacketSocket* socket,
         }
         oss << "}";
 
-        std::string init_payload = "INIT:" + oss.str();
-        SendMessage(init_payload);
+        std::string invite_payload = std::string(Msg::kInvitePrefix) + oss.str();
+        SendMessage(invite_payload);
     } 
-    else if (message.find("WAITING") == 0) {
+    else if (message.find(Msg::kWaiting) == 0) {
         Start();
     } 
-    else if (message == "OK") {
+    else if (message.find(StatusCodes::kBadRequest) == 0 ||
+             message.find(StatusCodes::kTemporarilyUnavailable) == 0 ||
+             message.find(StatusCodes::kBusyHere) == 0) {
+        RTC_LOG(LS_WARNING) << "Received error status from callee: " << message;
+        // Stop HELLO retries to avoid spamming the callee.
+        welcome_received_ = false;
+        hello_attempts_ = kMaxHelloAttempts; // disable further retries
+
+        // Clean up connection attempt.
+        ShutdownInternal();
+
+        // Close and reset socket similar to CANCEL handling.
+        if (tcp_socket_) {
+            tcp_socket_->Close();
+            tcp_socket_.reset();
+        }
+    }
+    else if (message == StatusCodes::kOk) {
         // Remote acknowledged our CANCEL. Close PeerConnection but keep
         // worker/signaling threads running so that we can place another
         // call without having to re-create the whole DirectCaller instance.
@@ -249,7 +267,7 @@ void DirectCaller::Disconnect() {
     RTC_LOG(LS_INFO) << "Caller signaling disconnect, sending CANCEL due to connection timeout.";
     // Update timestamp *before* signaling/shutdown
     last_disconnect_time_ = std::chrono::steady_clock::now(); 
-    if (SendMessage("CANCEL")) { // Send CANCEL to signal disconnect without shutdown
+    if (SendMessage(Msg::kCancel)) { // Send CANCEL to signal disconnect without shutdown
         RTC_LOG(LS_INFO) << "CANCEL message sent successfully.";
     } else {
         RTC_LOG(LS_WARNING) << "Failed to send CANCEL message.";
@@ -274,7 +292,7 @@ void DirectCaller::SendHelloWithRetry() {
     }
 
     // Send HELLO now.
-    if (SendMessage("HELLO")) {
+    if (SendMessage(Msg::kHello)) {
         RTC_LOG(LS_INFO) << "HELLO attempt " << (hello_attempts_ + 1)
                          << " sent successfully";
     } else {
