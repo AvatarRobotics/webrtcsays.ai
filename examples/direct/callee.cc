@@ -264,7 +264,7 @@ void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
                    << remote_addr.ToString();
 
   // Use prefix match to be tolerant of combined packets
-  if (len >= 5 && memcmp(data, "HELLO", 5) == 0) {
+  if (len >= sizeof(Msg::kHello) - 1 && memcmp(data, Msg::kHello, sizeof(Msg::kHello) - 1) == 0) {
     // Determine callee state to pick correct status code
     //  - 486 Busy Here: already in an active PeerConnection
     //  - 200 OK: ready to accept call
@@ -289,7 +289,7 @@ void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
     OnCancel(socket);
   } else {
     // Forward other messages to default handler
-    if (len >= 1 && memcmp(data, "HELLO", std::min<size_t>(len,5)) != 0) {
+    if (len >= 1 && memcmp(data, Msg::kHello, std::min<size_t>(len, sizeof(Msg::kHello)-1)) != 0) {
       // Unrecognized initial request – respond with Bad Request once.
       SendMessage(StatusCodes::kBadRequest);
     }

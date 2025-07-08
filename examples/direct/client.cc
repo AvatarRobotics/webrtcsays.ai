@@ -30,6 +30,10 @@ DirectCallerClient::DirectCallerClient(const Options& opts)
     }
     owner_thread_ = rtc::Thread::Current();
     signaling_client_ = std::make_unique<DirectClient>(opts.user_name);
+    // Busy when caller already in an active call
+    signaling_client_->setIsBusyCallback([this]() {
+        return this->peer_connection() != nullptr;
+    });
 }
 
 DirectCallerClient::~DirectCallerClient() { Disconnect(); }
@@ -368,6 +372,10 @@ DirectCalleeClient::DirectCalleeClient(const Options& opts)
     // to bind successfully even if the previous one is still in TIME_WAIT.
     local_port_ = 0;
     signaling_client_ = std::make_unique<DirectClient>(opts.user_name);
+    // Provide busy predicate: callee is busy while a PeerConnection exists
+    signaling_client_->setIsBusyCallback([this]() {
+        return this->peer_connection() != nullptr;
+    });
 }
 
 DirectCalleeClient::~DirectCalleeClient() {
@@ -775,13 +783,13 @@ bool DirectClient::requestUserList() {
 
 bool DirectClient::sendOffer(const std::string& target_peer_id, const std::string& sdp) {
     if (!connected_) return false;
-    std::string msg = "OFFER:" + user_id_ + ":" + sdp;
+    std::string msg = std::string(Msg::kOfferPrefix) + user_id_ + ":" + sdp;
     return ws_client_->send_message(msg);
 }
 
 bool DirectClient::sendAnswer(const std::string& target_peer_id, const std::string& sdp) {
     if (!connected_) return false;
-    std::string msg = "ANSWER:" + user_id_ + ":" + sdp;
+    std::string msg = std::string(Msg::kAnswerPrefix) + user_id_ + ":" + sdp;
     return ws_client_->send_message(msg);
 }
 
@@ -828,12 +836,16 @@ void DirectClient::handleProtocolMessage(const std::string& message) {
         // Targeted HELLO:HELLO:<user>
         std::string target = message.substr(6);
         if (target == user_id_) {
-            APP_LOG(AS_INFO) << "HELLO is for us, sending " << StatusCodes::kOk;
-            ws_client_->send_message(StatusCodes::kOk);
+            bool busy = is_busy_callback_ ? is_busy_callback_() : false;
+            const char* response = busy ? StatusCodes::kBusyHere : StatusCodes::kOk;
+            APP_LOG(AS_INFO) << "HELLO is for us, sending " << response;
+            ws_client_->send_message(response);
         }
     } else if (message == Msg::kHello) {
-        APP_LOG(AS_INFO) << "DirectClient received generic HELLO, sending " << StatusCodes::kOk;
-        ws_client_->send_message(StatusCodes::kOk);
+        bool busy = is_busy_callback_ ? is_busy_callback_() : false;
+        const char* response = busy ? StatusCodes::kBusyHere : StatusCodes::kOk;
+        APP_LOG(AS_INFO) << "DirectClient received generic HELLO, sending " << response;
+        ws_client_->send_message(response);
     } else if (message == Msg::kInvite) {
         APP_LOG(AS_INFO) << "DirectClient received " << Msg::kInvite << ", sending " << Msg::kWaiting;
         ws_client_->send_message(Msg::kWaiting);
@@ -880,7 +892,7 @@ void DirectClient::handleProtocolMessage(const std::string& message) {
         if (user_list_received_callback_) {
             user_list_received_callback_(users);
         }
-    } else if (message.rfind("OFFER:", 0) == 0) {
+    } else if (message.rfind(Msg::kOfferPrefix, 0) == 0) {
         // Format: OFFER:peer_id:sdp
         size_t first_colon = message.find(':'); // after OFFER
         size_t second_colon = message.find(':', first_colon + 1);
@@ -897,7 +909,7 @@ void DirectClient::handleProtocolMessage(const std::string& message) {
         } else {
             APP_LOG(AS_WARNING) << "Malformed OFFER message: " << message;
         }
-    } else if (message.rfind("ANSWER:", 0) == 0) {
+    } else if (message.rfind(Msg::kAnswerPrefix, 0) == 0) {
         // Format: ANSWER:peer_id:sdp
         size_t first_colon = message.find(':');
         size_t second_colon = message.find(':', first_colon + 1);

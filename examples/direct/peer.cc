@@ -161,7 +161,7 @@ void DirectPeer::Start() {
                         RTC_LOG(LS_INFO) << "Local description set successfully";
                         // Now that both descriptions may be in place, process any queued ICE candidates.
                         DrainPendingIceCandidates();
-                        SendMessage(std::string("OFFER:") + sdp);
+                        SendMessage(std::string(Msg::kOfferPrefix) + sdp);
                     });
 
                 peer_connection_->SetLocalDescription(std::move(desc), set_local_description_observer_);
@@ -424,7 +424,7 @@ void DirectPeer::SetRemoteDescription(const std::string& sdp) {
                                     RTC_LOG(LS_INFO) << "Local description set successfully";
                                     // Both descriptions should now be set on callee side as well.
                                     DrainPendingIceCandidates();
-                                    SendMessage(std::string("ANSWER:") + sdp);
+                                    SendMessage(std::string(Msg::kAnswerPrefix) + sdp);
                             });
 
                             peer_connection_->SetLocalDescription(std::move(desc), set_local_description_observer_);

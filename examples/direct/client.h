@@ -66,6 +66,9 @@ public:
     void setHelloReceivedCallback(HelloReceivedCallback callback) { hello_received_callback_ = callback; }
     void setAddressReceivedCallback(AddressReceivedCallback callback) { address_received_callback_ = callback; }
     void setUserListReceivedCallback(UserListReceivedCallback callback) { user_list_received_callback_ = callback; }
+
+    // Indicates whether this client is currently busy (active call)
+    void setIsBusyCallback(const std::function<bool()>& cb) { is_busy_callback_ = cb; }
   
     // Message sending methods
     bool sendOffer(const std::string& target_peer_id, const std::string& sdp);
@@ -105,6 +108,7 @@ protected:
     HelloReceivedCallback hello_received_callback_;
     AddressReceivedCallback address_received_callback_;
     UserListReceivedCallback user_list_received_callback_;
+    std::function<bool()> is_busy_callback_;
     
     std::function<void(const std::string&)> default_ws_handler_;
     
