@@ -769,7 +769,7 @@ bool DirectClient::sendHelloToUser(const std::string& target_user_id) {
 
 bool DirectClient::requestUserList() {
     if (!connected_) return false;
-    return ws_client_->send_message("USER_LIST");
+    return ws_client_->send_message("USERS");
 }
 
 bool DirectClient::sendOffer(const std::string& target_peer_id, const std::string& sdp) {
@@ -855,10 +855,19 @@ void DirectClient::handleProtocolMessage(const std::string& message) {
         } else {
             APP_LOG(AS_WARNING) << "ADDRESS message malformed: " << message;
         }
-    } else if (message.rfind("USER_LIST:", 0) == 0) {
-        // Format: USER_LIST:user1,user2,user3
+    } else if (message.rfind("USERS", 0) == 0) {
+        // Format accepted:
+        //   "USERS:user1,user2"  (preferred)
+        //   "USERS user1,user2"  (legacy – without colon)
+        size_t delimiter = message.find_first_of(": ");
+        std::string user_list_str;
+        if (delimiter != std::string::npos) {
+            user_list_str = message.substr(delimiter + 1);
+        } else {
+            // No delimiter – nothing to parse
+            user_list_str = "";
+        }
         std::vector<std::string> users;
-        std::string user_list_str = message.substr(10);
         std::stringstream ss(user_list_str);
         std::string user;
         while (std::getline(ss, user, ',')) {
@@ -866,7 +875,7 @@ void DirectClient::handleProtocolMessage(const std::string& message) {
                 users.push_back(user);
             }
         }
-        APP_LOG(AS_INFO) << "DirectClient received USER_LIST with " << users.size() << " users";
+        APP_LOG(AS_INFO) << "DirectClient received USERS with " << users.size() << " users";
         if (user_list_received_callback_) {
             user_list_received_callback_(users);
         }
