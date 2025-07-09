@@ -209,8 +209,16 @@ void DirectCallee::OnNewConnection(rtc::AsyncListenSocket* listen_socket,
                    << current_client_socket->GetRemoteAddress().ToString()
                    << " on socket (" << new_socket << ")";
 
-  // Overwrite the base class socket - assumes only one active connection for
-  // SendMessage If supporting multiple clients, this needs rethinking.
+  // If we are already in an active call (peer_connection_ or an existing
+  // tcp_socket_), politely reject the new connection with "486 Busy Here"
+  if (this->peer_connection_ || (tcp_socket_ && tcp_socket_.get() != nullptr)) {
+    std::string busy_msg = StatusCodes::kBusyHere;
+    current_client_socket->Send(busy_msg.c_str(), busy_msg.size(), rtc::PacketOptions());
+    current_client_socket->Close();
+    return; // keep existing call intact
+  }
+
+  // No active call – proceed to accept this socket.
   tcp_socket_.reset(current_client_socket);
 
   // Register callback on the specific socket for this connection
