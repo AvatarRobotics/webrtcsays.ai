@@ -26,6 +26,7 @@
 
 #include "direct.h"
 #include "status.h"
+#include "parser.h"
 
 #if TARGET_OS_IOS || TARGET_OS_OSX
 #include "bonjour.h"
@@ -289,11 +290,11 @@ void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
     OnCancel(socket);
   } else {
     // Forward other messages to default handler
-    // Send 400 Bad Request only for truly unrecognized first-line messages
-    if (len >= 1 && memcmp(data, Msg::kHello, std::min<size_t>(len, sizeof(Msg::kHello)-1)) != 0 &&
-        !(len >= sizeof(Msg::kInvite) -1 && memcmp(data, Msg::kInvite, sizeof(Msg::kInvite)-1) == 0) &&
-        !(len >= sizeof(Msg::kInvitePrefix) -1 && memcmp(data, Msg::kInvitePrefix, sizeof(Msg::kInvitePrefix)-1) == 0)) {
-      SendMessage(StatusCodes::kBadRequest);
+    // Malformed JSON? – respond with 400 once.
+    std::string cmd;
+    Json::Value params;
+    if (!ParseMessageLine(std::string((const char*)data, len), cmd, params)) {
+        SendMessage(StatusCodes::kBadRequest);
     }
     std::string message;
     message.resize(len);
