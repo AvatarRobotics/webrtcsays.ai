@@ -147,9 +147,7 @@ private:
     // tried.
     std::atomic<bool> call_started_{false};
 
-    // Store first public candidate while we wait briefly for a private one.
-    std::string pending_ip_;
-    int         pending_port_ = 0;
+    // Fallback address storage moved to DirectPeer base (pending_ip_, pending_port_)
 
 public:
     // Alternate constructor taking fully-populated Options directly
@@ -189,7 +187,7 @@ public:
 private:
     void onPeerJoined(const std::string& peer_id);
     void onPeerAddressResolved(const std::string& peer_id, const std::string& ip, int port);
-    bool initiateWebRTCCall(const std::string& ip, int port);
+    // initiateWebRTCCall now implemented in DirectPeer base
     void onAnswerReceived(const std::string& peer_id, const std::string& sdp);
     void onIceCandidateReceived(const std::string& peer_id, const std::string& candidate);
 };

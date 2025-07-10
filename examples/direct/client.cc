@@ -32,7 +32,10 @@ DirectCallerClient::DirectCallerClient(const Options& opts)
     signaling_client_ = std::make_unique<DirectClient>(opts.user_name);
     // Busy when caller already in an active call
     signaling_client_->setIsBusyCallback([this]() {
-        return (this->peer_connection() != nullptr) || (this->tcp_socket_ != nullptr);
+        bool pc_active   = this->peer_connection() != nullptr;
+        bool sock_active = this->tcp_socket_ != nullptr &&
+                           this->tcp_socket_->GetState() != rtc::AsyncPacketSocket::STATE_CLOSED;
+        return pc_active || sock_active;
     });
 }
 
@@ -309,44 +312,7 @@ void DirectCallerClient::onPeerAddressResolved(const std::string& peer_id,
     }).detach();
 }
 
-bool DirectCallerClient::initiateWebRTCCall(const std::string& ip, int port) {
-    APP_LOG(AS_INFO) << "DirectCallerClient: Initiating WebRTC call to " << ip << ":" << port;
-    
-    // We are already initialized; just proceed to connect
-
-    if (!DirectCaller::Connect(ip.c_str(), port)) {
-        APP_LOG(AS_ERROR) << "Connect to " << ip << ':' << port << " failed";
-
-        // If we have a queued fallback address, try it right away.
-        if (!pending_ip_.empty()) {
-            std::string fallback_ip  = pending_ip_;
-            int         fallback_prt = pending_port_;
-            pending_ip_.clear();
-            pending_port_ = 0;
-
-            APP_LOG(AS_INFO) << "DirectCallerClient: Attempting fallback address " << fallback_ip << ":" << fallback_prt;
-            // Note: keep call_started_ true – we are still in dialing phase.
-            std::thread([this, fallback_ip, fallback_prt] { initiateWebRTCCall(fallback_ip, fallback_prt); }).detach();
-            return false;
-        }
-
-        // No queued fallback → ask the signalling server for fresh address info.
-        if (signaling_client_) {
-            APP_LOG(AS_INFO) << "Re-sending HELLO to request updated address";
-            signaling_client_->sendHelloToUser(opts_.target_name);
-        }
-
-        call_started_ = false;    // allow the next ADDRESS to be processed
-        return false;
-    }
-
-    // After the socket is connected, start the DirectApplication event loop
-    // on a detached native thread to keep processing.
-    std::thread([this]() {
-        this->RunOnBackgroundThread();
-    }).detach();
-    return true;
-}
+// initiateWebRTCCall definition moved to DirectPeer base class.
 
 void DirectCallerClient::onAnswerReceived(const std::string& peer_id, const std::string& sdp) {
     // This would be handled by DirectCaller's internal WebRTC logic
@@ -375,8 +341,10 @@ DirectCalleeClient::DirectCalleeClient(const Options& opts)
     signaling_client_ = std::make_unique<DirectClient>(opts.user_name);
     // Provide busy predicate: callee is busy while a PeerConnection exists
     signaling_client_->setIsBusyCallback([this]() {
-        // Busy if we already have an established or pending PeerConnection or an open TCP socket
-        return (this->peer_connection() != nullptr) || (this->tcp_socket_ != nullptr);
+        bool pc_active   = this->peer_connection() != nullptr;
+        bool sock_active = this->tcp_socket_ != nullptr &&
+                           this->tcp_socket_->GetState() != rtc::AsyncPacketSocket::STATE_CLOSED;
+        return pc_active || sock_active;
     });
 }
 
@@ -833,25 +801,20 @@ void DirectClient::disconnect() {
 bool DirectClient::startTcpServer(int) { return false; }
 
 void DirectClient::handleProtocolMessage(const std::string& message) {
-    if (message.rfind(Msg::kHelloPrefix, 0) == 0) {
+    if (message.rfind(Msg::kHelloPrefix, 0) == 0 || message.rfind(Msg::kHello, 0) == 0) {
         APP_LOG(AS_INFO) << "DirectClient received targeted HELLO: " << message;
-        // Targeted HELLO:HELLO:<user>
+        // Targeted HELLO:HELLO:<caller id>
         std::string target = message.substr(6);
-        if (target == user_id_) {
-            bool busy = is_busy_callback_ ? is_busy_callback_() : false;
-            const char* response = busy ? StatusCodes::kBusyHere : StatusCodes::kOk;
-            APP_LOG(AS_INFO) << "HELLO is for us, sending " << response;
-            ws_client_->send_message(response);
-        }
-    } else if (message == Msg::kHello) {
         bool busy = is_busy_callback_ ? is_busy_callback_() : false;
         const char* response = busy ? StatusCodes::kBusyHere : StatusCodes::kOk;
-        APP_LOG(AS_INFO) << "DirectClient received generic HELLO, sending " << response;
+        APP_LOG(AS_INFO) << "HELLO is for us, sending " << response;
         ws_client_->send_message(response);
-    } else if (message == Msg::kInvite) {
+
+    } else if (message.rfind(Msg::kInvitePrefix, 0) == 0) {
         APP_LOG(AS_INFO) << "DirectClient received " << Msg::kInvite << ", sending " << Msg::kWaiting;
         ws_client_->send_message(Msg::kWaiting);
-    } else if (message.rfind("ADDRESS:", 0) == 0) {
+
+    } else if (message.rfind(Msg::kAddressPrefix, 0) == 0) {
         // Format: ADDRESS:user_id:ip:port
         std::vector<std::string> parts;
         std::stringstream ss(message);
@@ -870,7 +833,8 @@ void DirectClient::handleProtocolMessage(const std::string& message) {
         } else {
             APP_LOG(AS_WARNING) << "ADDRESS message malformed: " << message;
         }
-    } else if (message.rfind("USERS:", 0) == 0) {
+
+    } else if (message.rfind(Msg::kUsersPrefix, 0) == 0) {
         // Format accepted:
         //   "USERS:user1,user2"  (preferred)
         //   "USERS user1,user2"  (legacy – without colon)
@@ -894,6 +858,7 @@ void DirectClient::handleProtocolMessage(const std::string& message) {
         if (user_list_received_callback_) {
             user_list_received_callback_(users);
         }
+
     } else if (message.rfind(Msg::kOfferPrefix, 0) == 0) {
         // Format: OFFER:peer_id:sdp
         size_t first_colon = message.find(':'); // after OFFER
@@ -911,6 +876,7 @@ void DirectClient::handleProtocolMessage(const std::string& message) {
         } else {
             APP_LOG(AS_WARNING) << "Malformed OFFER message: " << message;
         }
+
     } else if (message.rfind(Msg::kAnswerPrefix, 0) == 0) {
         // Format: ANSWER:peer_id:sdp
         size_t first_colon = message.find(':');
@@ -928,7 +894,8 @@ void DirectClient::handleProtocolMessage(const std::string& message) {
         } else {
             APP_LOG(AS_WARNING) << "Malformed ANSWER message: " << message;
         }
-    } else if (message.rfind("ICE:", 0) == 0) {
+
+    } else if (message.rfind(Msg::kIcePrefix, 0) == 0) {
         // Format: ICE:peer_id:candidate
         size_t first_colon = message.find(':');
         size_t second_colon = message.find(':', first_colon + 1);

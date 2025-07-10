@@ -206,12 +206,12 @@ void DirectCaller::OnMessage(rtc::AsyncPacketSocket* socket,
         return in.substr(first, last - first + 1);
     };
 
-    std::string clean = trim(raw);
+    std::string message = trim(raw);
 
     // Special-case: we are waiting for BYE that confirms our previous CANCEL.
-    if (waiting_cancel_ack_ && clean == Msg::kBye) {
+    // The callee responds with a BYE, not another CANCEL.
+    if (message.rfind(Msg::kBye, 0) == 0) {
         RTC_LOG(LS_INFO) << "Received CANCEL ACK (BYE). Resetting caller state.";
-        waiting_cancel_ack_ = false;
         ResetCallStartedFlag();      // let derived class clear busy flag / dial queued address
 
         // Tear down the old PeerConnection & socket so the next call starts cleanly.
@@ -222,8 +222,6 @@ void DirectCaller::OnMessage(rtc::AsyncPacketSocket* socket,
         }
         return; // skip regular 200-OK processing below
     }
-
-    const std::string& message = clean; // reuse existing variable names below
 
     // -------------------------------------------------------------------
     // Normal handshake / signalling processing starts here
@@ -297,7 +295,7 @@ void DirectCaller::Disconnect() {
     RTC_LOG(LS_INFO) << "Caller signaling disconnect, sending CANCEL due to connection timeout.";
     // Update timestamp *before* signaling/shutdown
     last_disconnect_time_ = std::chrono::steady_clock::now(); 
-    waiting_cancel_ack_ = true;
+    
     if (SendMessage(Msg::kCancel)) { // Send CANCEL to signal disconnect without shutdown
         RTC_LOG(LS_INFO) << "CANCEL message sent successfully.";
     } else {
@@ -341,4 +339,16 @@ void DirectCaller::SendHelloWithRetry() {
             }, webrtc::TimeDelta::Millis(200));  // retry after 200 ms
         }
     }
+}
+
+// ----------------------------------------------------------------------------
+//  DirectCaller specific reset: restart HELLO handshake counters
+// ----------------------------------------------------------------------------
+void DirectCaller::ResetCallStartedFlag() {
+    // Call base to clear any queued fallback address
+    DirectPeer::ResetCallStartedFlag();
+
+    // Reset handshake tracking so next connection starts cleanly
+    hello_attempts_   = 0;
+    welcome_received_ = false;
 }

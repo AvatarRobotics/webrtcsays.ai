@@ -272,8 +272,9 @@ void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
   RTC_LOG(LS_INFO) << "Callee received: " << bufLog << " from "
                    << remote_addr.ToString();
 
+  std::string message(reinterpret_cast<const char*>(data), len);
   // Use prefix match to be tolerant of combined packets
-  if (len >= sizeof(Msg::kHello) - 1 && memcmp(data, Msg::kHello, sizeof(Msg::kHello) - 1) == 0) {
+  if (message.rfind(Msg::kHello, 0) == 0) {
     // Determine callee state to pick correct status code
     //  - 486 Busy Here: already in an active PeerConnection
     //  - 200 OK: ready to accept call
@@ -289,7 +290,7 @@ void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
       // Ready – acknowledge.
       SendMessage(StatusCodes::kOk);
     }
-  } else if (len == 3 && memcmp(data, "BYE", 3) == 0) {
+  } else if (message.rfind(Msg::kBye, 0) == 0) {
     SendMessage(StatusCodes::kOk);
     // Schedule a graceful teardown of the current PeerConnection so that the
     // callee immediately becomes available for a new incoming call.  We post
@@ -299,7 +300,7 @@ void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
       self->ShutdownInternal();
     });
     // Skipping synchronous shutdown for BYE to avoid blocking
-  } else if (len == 6 && memcmp(data, "CANCEL", 6) == 0) {
+  } else if (message.rfind(Msg::kCancel, 0) == 0) {
     RTC_LOG(LS_INFO) << "Received CANCEL from " << remote_addr.ToString()
                      << ". Restarting listener.";
     OnCancel(socket);
@@ -311,9 +312,6 @@ void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
     if (!ParseMessageLine(std::string((const char*)data, len), cmd, params)) {
         SendMessage(StatusCodes::kBadRequest);
     }
-    std::string message;
-    message.resize(len);
-    memcpy(&message[0], data, len);
     HandleMessage(socket, message, remote_addr);
   }
 }
@@ -323,6 +321,11 @@ void DirectCallee::OnCancel(rtc::AsyncPacketSocket* socket) {
     RTC_LOG(LS_WARNING) << "Received CANCEL on an unexpected socket.";
     return;
   }
+
+  // Clear any per-call busy flags so the callee becomes immediately
+  // available for follow-up calls (e.g., when a queued address is waiting
+  // to be dialed by a DirectCalleeClient subclass).
+  ResetCallStartedFlag();      // let derived class clear busy flag / dial queued address
 
   // Send explicit BYE in response to CANCEL so the caller can distinguish it
   // from the initial 200 OK used in the HELLO handshake.
@@ -357,7 +360,7 @@ void DirectCallee::OnCancel(rtc::AsyncPacketSocket* socket) {
   // control-loop via connection_closed_event_.
   ignore_next_close_event_ = true;
 
-  worker_thread()->BlockingCall([this]() {
+  worker_thread()->PostTask([this]() {
     if (audio_device_module_) {
       audio_device_module_->StopPlayout();
       audio_device_module_->StopRecording();
@@ -402,13 +405,5 @@ void DirectCallee::OnIceConnectionChange(PeerConnectionInterface::IceConnectionS
 }
 
 void DirectCallee::ShutdownInternal() {
-  if (peer_connection_) {
-    peer_connection_->Close();
-    peer_connection_ = nullptr;
-  }
-
-  // Defer factory destruction to main thread so blocking waits are allowed
-  main_thread()->PostTask([this]() {
-    peer_connection_factory_ = nullptr;
-  });
+  DirectPeer::ShutdownInternal();
 }
