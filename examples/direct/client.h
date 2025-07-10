@@ -147,9 +147,7 @@ private:
     // tried.
     std::atomic<bool> call_started_{false};
 
-    // Store first public candidate while we wait briefly for a private one.
-    std::string pending_ip_;
-    int         pending_port_ = 0;
+    // Fallback address storage moved to DirectPeer base (pending_ip_, pending_port_)
 
 public:
     // Alternate constructor taking fully-populated Options directly
@@ -169,11 +167,27 @@ public:
     // Add SetUserListCallback and RequestUserList to DirectCallerClient public section
     void SetUserListCallback(UserListReceivedCallback callback) { signaling_client_->setUserListReceivedCallback(callback); }
     bool RequestUserList();
+
+    // Allow external classes (e.g., DirectCaller base implementation) to
+    // clear the internal call_started_ flag after a completed call so that
+    // the next ADDRESS message can trigger a fresh dial.
+    void ResetCallStartedFlag() override {
+        call_started_ = false;
+        // If we previously queued a fallback ADDRESS while busy, dial it now.
+        if (!pending_ip_.empty()) {
+            call_started_ = true;  // prevent further queuing
+            std::string ip  = pending_ip_;
+            int         prt = pending_port_;
+            pending_ip_.clear();
+            pending_port_ = 0;
+            std::thread([this, ip, prt] { initiateWebRTCCall(ip, prt); }).detach();
+        }
+    }
     
 private:
     void onPeerJoined(const std::string& peer_id);
     void onPeerAddressResolved(const std::string& peer_id, const std::string& ip, int port);
-    bool initiateWebRTCCall(const std::string& ip, int port);
+    // initiateWebRTCCall now implemented in DirectPeer base
     void onAnswerReceived(const std::string& peer_id, const std::string& sdp);
     void onIceCandidateReceived(const std::string& peer_id, const std::string& candidate);
 };

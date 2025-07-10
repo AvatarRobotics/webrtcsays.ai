@@ -38,6 +38,12 @@ inline constexpr const char kIcePrefix[]    = "ICE:";
 inline constexpr const char kCancel[] = "CANCEL";
 inline constexpr const char kBye[]    = "BYE";
 
+inline constexpr const char kAddress[]       = "ADDRESS";    // broadcast ADDRESS
+inline constexpr const char kAddressPrefix[] = "ADDRESS:";   // targeted ADDRESS:<user>:<ip>:<port>
+
+inline constexpr const char kUsers[]       = "USERS";    // broadcast USERS
+inline constexpr const char kUsersPrefix[] = "USERS:";   // targeted USERS:<user1>,<user2>
+
 } // namespace Msg
 
 #endif // EXAMPLES_DIRECT_STATUS_H_ 

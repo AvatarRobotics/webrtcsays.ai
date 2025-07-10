@@ -12,6 +12,7 @@
 
 #include <string>
 #include <vector>
+#include <thread>
 
 #include "api/peer_connection_interface.h"
 #include "api/rtc_event_log/rtc_event_log.h"
@@ -47,8 +48,10 @@ void DirectPeer::ShutdownInternal() {
     RTC_LOG(LS_INFO) << "Shutting down peer connection (DirectPeer::ShutdownInternal)";
     RTC_LOG(LS_INFO) << "Current peer connection state before shutdown: " << (peer_connection_ ? "Active" : "Inactive");
 
-    // Perform close and release on the signaling thread
-    signaling_thread()->PostTask([this]() {
+    // Clear pointer now so "busy" checks immediately reflect idle state.
+    auto pc_to_close = std::move(peer_connection_);
+
+    signaling_thread()->PostTask([this, pc = std::move(pc_to_close)]() mutable {
         //RTC_DCHECK_RUN_ON(signaling_thread());
         // Release tracks first so their destructors can safely invoke into WebRTC threads
         audio_track_ = nullptr;
@@ -56,22 +59,18 @@ void DirectPeer::ShutdownInternal() {
         video_source_ = nullptr;
         RTC_LOG(LS_INFO) << "Media tracks and sources released on signaling thread.";
         // Now close the PeerConnection, after tracks are released
-        if (peer_connection_) {
-            peer_connection_->Close();
+        if (pc) {
+            pc->Close();
             RTC_LOG(LS_INFO) << "Peer connection closed on signaling thread.";
-            peer_connection_ = nullptr; // Release ref ptr on signaling thread
-            RTC_LOG(LS_INFO) << "Peer connection pointer reset to nullptr.";
+            pc = nullptr;
         } else {
             RTC_LOG(LS_INFO) << "No active peer connection to close.";
         }
-        // NOTE: Releasing the factory on the signaling thread can trigger
-        // rtc::Thread DCHECKs when its destructor executes blocking waits.
-        // Defer the actual reset to the main (owner) thread where blocking
-        // calls are allowed.
-        main_thread()->PostTask([this]() {
-          peer_connection_factory_ = nullptr;
-        });
+        // Defer factory destruction to main thread (non-blocking)
     });
+
+    // Factory reset can happen asynchronously; no blocking ops needed.
+    main_thread()->PostTask([this]() { peer_connection_factory_ = nullptr; });
 
     RTC_LOG(LS_INFO) << "Peer connection and factory closed and released on signaling thread. Peer connection factory preserved for reconnection.";
 }
@@ -572,4 +571,40 @@ void DirectPeer::DrainPendingIceCandidates() {
     }
 
     pending_ice_candidates_.clear();
+}
+
+// ----------------------------------------------------------------------------
+//  DirectPeer – pending‐address helpers shared by caller/callee
+// ----------------------------------------------------------------------------
+
+void DirectPeer::ResetCallStartedFlag() {
+    // Clear any queued fallback address so the next signalling event starts
+    // with a clean slate.
+    pending_ip_.clear();
+    pending_port_ = 0;
+}
+
+bool DirectPeer::initiateWebRTCCall(const std::string& ip, int port) {
+    if (!is_caller()) {
+        RTC_LOG(LS_WARNING) << "initiateWebRTCCall called on a non-caller peer – ignored.";
+        return false;
+    }
+
+    // Down-cast to DirectCaller in order to reuse its Connect() overload.
+    // RTTI may be disabled (-fno-rtti), therefore avoid dynamic_cast.
+    auto* caller = static_cast<DirectCaller*>(this);
+    RTC_DCHECK(caller);  // Should always hold because is_caller() was true.
+
+    RTC_LOG(LS_INFO) << "DirectPeer: initiating WebRTC call to " << ip << ":" << port;
+
+    if (!caller->Connect(ip.c_str(), port)) {
+        RTC_LOG(LS_ERROR) << "DirectPeer: Connect to " << ip << ":" << port << " failed";
+        return false;
+    }
+
+    // Launch event loop on a detached thread so signalling continues.
+    std::thread([this]() {
+        this->RunOnBackgroundThread();
+    }).detach();
+    return true;
 }

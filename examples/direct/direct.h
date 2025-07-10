@@ -412,6 +412,24 @@ class DIRECT_API DirectPeer : public DirectApplication {
 
   // Event to signal complete connection closure
   rtc::Event connection_closed_event_;
+
+  // Pending address for deferred call initiation (used by caller to queue
+  // a fallback public address while waiting for a potentially better LAN
+  // address).
+  std::string pending_ip_;
+  int         pending_port_ = 0;
+
+  // Called by DirectCallerClient / DirectCalleeClient after a completed call
+  // to clear queued state so the next ADDRESS can trigger a fresh dial.
+  // Derived classes may override to perform additional work (e.g. clear
+  // their own busy flags) but should invoke the base implementation.
+  virtual void ResetCallStartedFlag();
+
+  // Helper that dials the specified IP/port using DirectCaller::Connect and
+  // launches the background processing loop.  Safe to call multiple times;
+  // failures are logged and reported via the boolean return value.
+  bool initiateWebRTCCall(const std::string& ip, int port);
+
  protected:
   // Override the virtual shutdown method from DirectApplication
   void ShutdownInternal() override;
@@ -469,6 +487,9 @@ class DIRECT_API DirectCallee : public DirectPeer, public sigslot::has_slots<> {
   // Callee does not initiate connection, overrides base class
   bool Connect() { return false; }
 
+  // Removed – now defined in DirectPeer base
+  // virtual void ResetCallStartedFlag() {}
+  
   int local_port_;
   std::unique_ptr<rtc::AsyncTcpListenSocket> listen_socket_;
   std::unique_ptr<rtc::AsyncTCPSocket> current_client_socket_; // Dedicated client socket
@@ -496,6 +517,9 @@ class DIRECT_API DirectCaller : public DirectPeer {
   // bool SendMessage(const std::string& message);
   virtual void Disconnect() override;
 
+  // Override to reset caller-specific handshake state (hello counter etc.)
+  void ResetCallStartedFlag() override;
+
   // Getter for current remote address
   rtc::SocketAddress GetRemoteAddress() const { return remote_addr_; }
 
@@ -521,6 +545,7 @@ class DIRECT_API DirectCaller : public DirectPeer {
   static constexpr int kMaxHelloAttempts = 5;   // Give up after 5 attempts
 
   rtc::SocketAddress remote_addr_;
+
   // std::unique_ptr<rtc::AsyncTCPSocket> tcp_socket_;
   std::chrono::steady_clock::time_point last_disconnect_time_;
 };
