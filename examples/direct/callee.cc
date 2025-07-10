@@ -291,6 +291,13 @@ void DirectCallee::OnMessage(rtc::AsyncPacketSocket* socket,
     }
   } else if (len == 3 && memcmp(data, "BYE", 3) == 0) {
     SendMessage(StatusCodes::kOk);
+    // Schedule a graceful teardown of the current PeerConnection so that the
+    // callee immediately becomes available for a new incoming call.  We post
+    // this task to the main thread to avoid blocking the network thread that
+    // delivered the BYE packet.
+    main_thread()->PostTask([self = this]() {
+      self->ShutdownInternal();
+    });
     // Skipping synchronous shutdown for BYE to avoid blocking
   } else if (len == 6 && memcmp(data, "CANCEL", 6) == 0) {
     RTC_LOG(LS_INFO) << "Received CANCEL from " << remote_addr.ToString()
@@ -317,8 +324,9 @@ void DirectCallee::OnCancel(rtc::AsyncPacketSocket* socket) {
     return;
   }
 
-  // Acknowledge the CANCEL so the caller proceeds to tear-down cleanly.
-  SendMessage(StatusCodes::kOk);
+  // Send explicit BYE in response to CANCEL so the caller can distinguish it
+  // from the initial 200 OK used in the HELLO handshake.
+  SendMessage(Msg::kBye);
 
   // Gracefully shut down the active PeerConnection (if any) so we release all
   // WebRTC resources tied to the just-finished call, but keep the listening
@@ -358,6 +366,12 @@ void DirectCallee::OnCancel(rtc::AsyncPacketSocket* socket) {
       dependencies_.adm   = nullptr;
     }
   });
+
+  // Notify outer control loop that the connection has ended so it can
+  // recreate a fresh DirectCalleeClient (and therefore a brand-new listening
+  // socket/port).  This avoids connectivity issues some NATs exhibit when we
+  // keep re-using the same port across calls.
+  // connection_closed_event_.Set();
 }
 
 void DirectCallee::OnClose(rtc::AsyncPacketSocket* socket) {

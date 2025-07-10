@@ -25,6 +25,7 @@
 #include <api/units/time_delta.h> // For webrtc::TimeDelta
 
 #include "direct.h"
+#include "client.h"
 #include "status.h"
 
 #if TARGET_OS_IOS || TARGET_OS_OSX
@@ -194,11 +195,41 @@ void DirectCaller::OnMessage(rtc::AsyncPacketSocket* socket,
                            const unsigned char* data,
                            size_t len,
                            const rtc::SocketAddress& remote_addr) {
-    std::string message(reinterpret_cast<const char*>(data), len);
-    RTC_LOG(LS_INFO) << "Caller received: " << message;
+    std::string raw(reinterpret_cast<const char*>(data), len);
+    RTC_LOG(LS_INFO) << "Caller received: " << raw;
 
-    // Allow for cases where multiple messages arrive concatenated in one TCP chunk.
-    if (message.find(StatusCodes::kOk) == 0) {
+    // Helper to trim CR/LF and spaces so we can reliably compare tokens.
+    auto trim = [](const std::string& in) {
+        size_t first = in.find_first_not_of(" \r\n");
+        if (first == std::string::npos) return std::string();
+        size_t last  = in.find_last_not_of(" \r\n");
+        return in.substr(first, last - first + 1);
+    };
+
+    std::string clean = trim(raw);
+
+    // Special-case: we are waiting for BYE that confirms our previous CANCEL.
+    if (waiting_cancel_ack_ && clean == Msg::kBye) {
+        RTC_LOG(LS_INFO) << "Received CANCEL ACK (BYE). Resetting caller state.";
+        waiting_cancel_ack_ = false;
+        ResetCallStartedFlag();      // let derived class clear busy flag / dial queued address
+
+        // Tear down the old PeerConnection & socket so the next call starts cleanly.
+        ShutdownInternal();
+        if (tcp_socket_) {
+            tcp_socket_->Close();
+            tcp_socket_.reset();
+        }
+        return; // skip regular 200-OK processing below
+    }
+
+    const std::string& message = clean; // reuse existing variable names below
+
+    // -------------------------------------------------------------------
+    // Normal handshake / signalling processing starts here
+    // -------------------------------------------------------------------
+
+    if (message.rfind(StatusCodes::kOk, 0) == 0) {
         // Stop further HELLO retries – handshake completed successfully.
         welcome_received_ = true;
 
@@ -249,14 +280,10 @@ void DirectCaller::OnMessage(rtc::AsyncPacketSocket* socket,
         }
     }
     else if (message == StatusCodes::kOk) {
-        // Remote acknowledged our CANCEL. Close PeerConnection but keep
-        // worker/signaling threads running so that we can place another
-        // call without having to re-create the whole DirectCaller instance.
-        ShutdownInternal();
+        // We are idle again – let the derived class reset its busy flag.
+        ResetCallStartedFlag();
 
-        // Close and discard the obsolete TCP socket so that any subsequent
-        // WELCOME/INIT handshake for the next call is delivered to the new
-        // socket created by the next Connect().
+        ShutdownInternal();
         if (tcp_socket_) {
             tcp_socket_->Close();
             tcp_socket_.reset();
@@ -270,6 +297,7 @@ void DirectCaller::Disconnect() {
     RTC_LOG(LS_INFO) << "Caller signaling disconnect, sending CANCEL due to connection timeout.";
     // Update timestamp *before* signaling/shutdown
     last_disconnect_time_ = std::chrono::steady_clock::now(); 
+    waiting_cancel_ack_ = true;
     if (SendMessage(Msg::kCancel)) { // Send CANCEL to signal disconnect without shutdown
         RTC_LOG(LS_INFO) << "CANCEL message sent successfully.";
     } else {

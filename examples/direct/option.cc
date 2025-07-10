@@ -191,9 +191,10 @@ Options parseOptions(const std::vector<std::string>& args) {
       fseek(fp, 0, SEEK_END);
       contents.resize(ftell(fp));
       rewind(fp);
-      fread(&contents[0], 1, contents.size(), fp);
+      size_t bytes_read = fread(&contents[0], 1, contents.size(), fp);
       fclose(fp);
-      RTC_LOG(LS_VERBOSE) << "JSON C-IO: Read " << contents.size() << " bytes.";
+      if(bytes_read == contents.size())
+        RTC_LOG(LS_VERBOSE) << "JSON C-IO: Read " << contents.size() << " bytes.";
 
       Json::Value config_json;
       Json::CharReaderBuilder reader_builder;

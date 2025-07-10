@@ -169,6 +169,22 @@ public:
     // Add SetUserListCallback and RequestUserList to DirectCallerClient public section
     void SetUserListCallback(UserListReceivedCallback callback) { signaling_client_->setUserListReceivedCallback(callback); }
     bool RequestUserList();
+
+    // Allow external classes (e.g., DirectCaller base implementation) to
+    // clear the internal call_started_ flag after a completed call so that
+    // the next ADDRESS message can trigger a fresh dial.
+    void ResetCallStartedFlag() override {
+        call_started_ = false;
+        // If we previously queued a fallback ADDRESS while busy, dial it now.
+        if (!pending_ip_.empty()) {
+            call_started_ = true;  // prevent further queuing
+            std::string ip  = pending_ip_;
+            int         prt = pending_port_;
+            pending_ip_.clear();
+            pending_port_ = 0;
+            std::thread([this, ip, prt] { initiateWebRTCCall(ip, prt); }).detach();
+        }
+    }
     
 private:
     void onPeerJoined(const std::string& peer_id);

@@ -198,6 +198,7 @@ void DirectCallerClient::Disconnect() {
     DirectCaller::Disconnect();
     // Reset connection-related state to allow for a new call
     initialized_ = false;
+    call_started_ = false;  // allow next ADDRESS to trigger a fresh dial
     APP_LOG(AS_INFO) << "DirectCallerClient disconnected and state reset for new call";
 }
 

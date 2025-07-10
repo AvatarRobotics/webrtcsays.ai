@@ -496,6 +496,11 @@ class DIRECT_API DirectCaller : public DirectPeer {
   // bool SendMessage(const std::string& message);
   virtual void Disconnect() override;
 
+  // Hook for derived classes (DirectCallerClient) to clear per-call flags once
+  // the previous call has fully terminated.  Default implementation is a
+  // no-op so standalone DirectCaller users are unaffected.
+  virtual void ResetCallStartedFlag() {}
+
   // Getter for current remote address
   rtc::SocketAddress GetRemoteAddress() const { return remote_addr_; }
 
@@ -518,9 +523,13 @@ class DIRECT_API DirectCaller : public DirectPeer {
   // Current number of HELLO attempts performed for the active connection
   int hello_attempts_ = 0;
 
+  // Tracks whether we are waiting for a CANCEL ACK from the remote peer
+  bool waiting_cancel_ack_ = false;
+
   static constexpr int kMaxHelloAttempts = 5;   // Give up after 5 attempts
 
   rtc::SocketAddress remote_addr_;
+
   // std::unique_ptr<rtc::AsyncTCPSocket> tcp_socket_;
   std::chrono::steady_clock::time_point last_disconnect_time_;
 };
