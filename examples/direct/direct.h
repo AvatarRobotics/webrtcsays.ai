@@ -431,6 +431,11 @@ class DIRECT_API DirectPeer : public DirectApplication {
   bool initiateWebRTCCall(const std::string& ip, int port);
 
  protected:
+  // When large OFFER/ANSWER SDP blobs are sent over the raw TCP signalling
+  // channel they may arrive split across multiple packets.  We buffer the
+  // fragments here until a complete SDP is received and successfully parsed.
+  std::string pending_remote_sdp_;
+
   // Override the virtual shutdown method from DirectApplication
   void ShutdownInternal() override;
 

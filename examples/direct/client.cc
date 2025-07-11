@@ -971,3 +971,14 @@ void DirectCallerClient_SetUserListCallbackC(DirectCallerClient*       client,
 
 // -----------------------------------------------------------------------------
 
+void DirectCallerClient::OnIceConnectionChange(webrtc::PeerConnectionInterface::IceConnectionState new_state)  {
+  DirectPeer::OnIceConnectionChange(new_state);
+  if (new_state == webrtc::PeerConnectionInterface::kIceConnectionFailed ||
+      new_state == webrtc::PeerConnectionInterface::kIceConnectionDisconnected) {
+    APP_LOG(AS_INFO) << "DirectCallerClient: ICE connection failed/disconnected, attempting fallback if available";
+    ResetCallStartedFlag();
+  }
+}
+
+// -----------------------------------------------------------------------------
+
