@@ -35,6 +35,10 @@ class SpeechAudioDeviceFactory {
   static AudioDeviceGeneric* CreateSpeechAudioDevice();
   static void SetTaskQueueFactory(TaskQueueFactory* task_queue_factory);
 
+  // Release cached helper devices so a new AudioDevice instance can create
+  // fresh ones with the correct callback/user_data pointers.
+  static void ResetDevices();
+
   static void SetWhisperModelFilename(absl::string_view whisper_model_filename);
   static void SetLlamaModelFilename(absl::string_view llama_model_filename);
   static void SetLlavaMMProjFilename(absl::string_view llava_mmproj_filename);

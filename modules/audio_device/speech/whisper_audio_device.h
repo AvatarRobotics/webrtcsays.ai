@@ -167,7 +167,10 @@ class WhisperAudioDevice : public SpeechAudioDevice {
   WhillatsSetLanguageCallback _languageCallback;
   WhillatsSetResponseCallback _llamaResponseCallback;
   
-  WhillatsTranscriber* _whisper_transcriber = nullptr; 
+  // Protects concurrent access to _whisper_transcriber across the playout
+  // thread and control thread (StartPlayout / StopPlayout).
+  mutable std::mutex _transcriber_mutex;
+  WhillatsTranscriber* _whisper_transcriber = nullptr; // guarded by _transcriber_mutex
   WhillatsTTS* _tts = nullptr;
   WhillatsLlama* _llama_device = nullptr;
 
