@@ -107,15 +107,6 @@ void DirectApplication::Cleanup() {
   // Explicitly close and release PeerConnection via Shutdown before stopping threads
   ShutdownInternal();
 
-#ifdef WEBRTC_SPEECH_DEVICES
-#if LLAMA_NOTIFICATION_ENABLED
-  if (opts_.llama && llama_) {
-    llama_->stop();
-    llama_ = nullptr;
-  } 
-#endif
-#endif
-
   // Remove sink before closing the connection - handle both local and remote tracks
   if (video_sink_) {
       auto remove_sinks_lambda = [this]() {
@@ -304,7 +295,7 @@ void DirectApplication::Disconnect() {
     };
 
     if (signaling_thread_ && rtc::Thread::Current() != signaling_thread_.get()) {
-      signaling_thread_->BlockingCall(release_local_track);
+      signaling_thread_->PostTask(release_local_track);
     } else {
       release_local_track();
     }
@@ -338,7 +329,7 @@ void DirectApplication::Disconnect() {
     // reference on the same thread so that the destructor executes where
     // WebRTC expects it.
 
-    signaling_thread()->BlockingCall([this]() {
+    signaling_thread()->PostTask([this]() {
       if (peer_connection_) {
         peer_connection_->Close();
         peer_connection_ = nullptr;  // release on signaling thread
@@ -354,7 +345,7 @@ void DirectApplication::Disconnect() {
     // calls on the owning thread we avoid the fatal RTC_DCHECK failure that
     // occurred during asynchronous teardown when the callee restarted.
     if (audio_device_module_ && worker_thread()) {
-      worker_thread()->BlockingCall([this]() {
+      worker_thread()->PostTask([this]() {
         audio_device_module_->StopPlayout();
         audio_device_module_->StopRecording();
       });
@@ -406,7 +397,7 @@ void DirectApplication::Disconnect() {
     // All ADM calls must happen on the same thread where the ADM was created
     // (our dedicated worker thread) otherwise WebRTC will DCHECK like:
     //   "TaskQueue doesn't match".
-    worker_thread()->BlockingCall([this]() {
+    worker_thread()->PostTask([this]() {
       if (!audio_device_module_) {
         return; // Already nulled from another path.
       }

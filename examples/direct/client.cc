@@ -33,9 +33,9 @@ DirectCallerClient::DirectCallerClient(const Options& opts)
     // Busy when caller already in an active call
     signaling_client_->setIsBusyCallback([this]() {
         bool pc_active   = this->peer_connection() != nullptr;
-        bool sock_active = this->tcp_socket_ != nullptr &&
-                           this->tcp_socket_->GetState() != rtc::AsyncPacketSocket::STATE_CLOSED;
-        return pc_active || sock_active;
+        // bool sock_active = this->tcp_socket_ != nullptr &&
+        //                    this->tcp_socket_->GetState() != rtc::AsyncPacketSocket::STATE_CLOSED;
+        return pc_active; // || sock_active;
     });
 }
 
@@ -289,7 +289,19 @@ void DirectCallerClient::onPeerAddressResolved(const std::string& peer_id,
         // Prefer immediate connect for LAN addresses.
         call_started_ = true;
         APP_LOG(AS_INFO) << "DirectCallerClient: Detected private address – dialing immediately " << ip << ":" << port;
-        std::thread([this, ip, port] { initiateWebRTCCall(ip, port); }).detach();
+        bool connect_success = initiateWebRTCCall(ip, port);
+        if (!connect_success) {
+            APP_LOG(AS_WARNING) << "DirectCallerClient: Connection attempt failed, resetting state and checking for pending address";
+            call_started_ = false;
+            if (!pending_ip_.empty()) {
+                std::string fallback_ip = pending_ip_;
+                int fallback_port = pending_port_;
+                pending_ip_.clear();
+                pending_port_ = 0;
+                APP_LOG(AS_INFO) << "DirectCallerClient: Falling back to queued address " << fallback_ip << ":" << fallback_port;
+                onPeerAddressResolved(peer_id, fallback_ip, fallback_port);  // Recurse to try fallback
+            }
+        }
         return;
     }
 
@@ -307,7 +319,11 @@ void DirectCallerClient::onPeerAddressResolved(const std::string& peer_id,
             pending_ip_.clear();
             pending_port_ = 0;
             APP_LOG(AS_INFO) << "DirectCallerClient: Fallback to public address after wait " << ip_to_dial << ":" << port_to_dial;
-            std::thread([this, ip_to_dial, port_to_dial] { initiateWebRTCCall(ip_to_dial, port_to_dial); }).detach();
+            bool connect_success = initiateWebRTCCall(ip_to_dial, port_to_dial);
+            if (!connect_success) {
+                APP_LOG(AS_WARNING) << "DirectCallerClient: Fallback connection attempt failed, resetting state";
+                call_started_ = false;
+            }
         }
     }).detach();
 }
@@ -342,9 +358,9 @@ DirectCalleeClient::DirectCalleeClient(const Options& opts)
     // Provide busy predicate: callee is busy while a PeerConnection exists
     signaling_client_->setIsBusyCallback([this]() {
         bool pc_active   = this->peer_connection() != nullptr;
-        bool sock_active = this->tcp_socket_ != nullptr &&
-                           this->tcp_socket_->GetState() != rtc::AsyncPacketSocket::STATE_CLOSED;
-        return pc_active || sock_active;
+        // bool sock_active = this->tcp_socket_ != nullptr &&
+        //                    this->tcp_socket_->GetState() != rtc::AsyncPacketSocket::STATE_CLOSED;
+        return pc_active; // || sock_active;
     });
 }
 
@@ -801,8 +817,9 @@ void DirectClient::disconnect() {
 bool DirectClient::startTcpServer(int) { return false; }
 
 void DirectClient::handleProtocolMessage(const std::string& message) {
+    APP_LOG(AS_INFO) << "DirectClient received message: " << message;
+
     if (message.rfind(Msg::kHelloPrefix, 0) == 0 || message.rfind(Msg::kHello, 0) == 0) {
-        APP_LOG(AS_INFO) << "DirectClient received targeted HELLO: " << message;
         // Targeted HELLO:HELLO:<caller id>
         std::string target = message.substr(6);
         bool busy = is_busy_callback_ ? is_busy_callback_() : false;
@@ -811,7 +828,7 @@ void DirectClient::handleProtocolMessage(const std::string& message) {
         ws_client_->send_message(response);
 
     } else if (message.rfind(Msg::kInvitePrefix, 0) == 0) {
-        APP_LOG(AS_INFO) << "DirectClient received " << Msg::kInvite << ", sending " << Msg::kWaiting;
+        APP_LOG(AS_INFO) << "DirectClient sending " << Msg::kWaiting;
         ws_client_->send_message(Msg::kWaiting);
 
     } else if (message.rfind(Msg::kAddressPrefix, 0) == 0) {
@@ -826,7 +843,7 @@ void DirectClient::handleProtocolMessage(const std::string& message) {
             std::string userId = parts[1];
             std::string ip = parts[2];
             int port = std::stoi(parts[3]);
-            APP_LOG(AS_INFO) << "DirectClient received ADDRESS for " << userId << " -> " << ip << ":" << port;
+            APP_LOG(AS_VERBOSE) << "DirectClient received ADDRESS for " << userId << " -> " << ip << ":" << port;
             if (address_received_callback_) {
                 address_received_callback_(userId, ip, port);
             }
@@ -966,6 +983,17 @@ void DirectCallerClient_SetUserListCallbackC(DirectCallerClient*       client,
     // the DirectCallerClient holds a copy of the std::function (which captures
     // the shared_ptr). When the client resets the callback or is destroyed the
     // shared_ptr ref-count drops to zero and the thunk is deleted.
+}
+
+// -----------------------------------------------------------------------------
+
+void DirectCallerClient::OnIceConnectionChange(webrtc::PeerConnectionInterface::IceConnectionState new_state)  {
+  DirectPeer::OnIceConnectionChange(new_state);
+  if (new_state == webrtc::PeerConnectionInterface::kIceConnectionFailed ||
+      new_state == webrtc::PeerConnectionInterface::kIceConnectionDisconnected) {
+    APP_LOG(AS_INFO) << "DirectCallerClient: ICE connection failed/disconnected, attempting fallback if available";
+    ResetCallStartedFlag();
+  }
 }
 
 // -----------------------------------------------------------------------------

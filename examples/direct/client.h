@@ -183,6 +183,8 @@ public:
             std::thread([this, ip, prt] { initiateWebRTCCall(ip, prt); }).detach();
         }
     }
+
+    void OnIceConnectionChange(webrtc::PeerConnectionInterface::IceConnectionState new_state) override;
     
 private:
     void onPeerJoined(const std::string& peer_id);

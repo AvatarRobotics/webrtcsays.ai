@@ -218,22 +218,51 @@ void DirectPeer::HandleMessage(rtc::AsyncPacketSocket* socket,
           RTC_LOG(LS_ERROR) << "Peer is not a caller, cannot wait";
         }
    } else if (!is_caller() && message.find(Msg::kOfferPrefix) == 0) {
-      std::string sdp = message.substr(sizeof(Msg::kOfferPrefix) - 1);  // Use exact length of "OFFER:"
-      if(!sdp.empty()) {
-        SetRemoteDescription(sdp);
-      } else {
-        RTC_LOG(LS_ERROR) << "Invalid SDP offer received";
+      // --------------------------------------------------------------
+      // OFFER (callee side) – may arrive in several TCP fragments.
+      // --------------------------------------------------------------
+      const size_t prefix_len = sizeof(Msg::kOfferPrefix) - 1; // length of "OFFER:"
+      std::string sdp_fragment = message.substr(prefix_len);
+
+      pending_remote_sdp_ += sdp_fragment;
+
+      // Try parsing the accumulated buffer to see if we now have the full SDP.
+      webrtc::SdpParseError err;
+      std::unique_ptr<webrtc::SessionDescriptionInterface> test_desc =
+          webrtc::CreateSessionDescription(webrtc::SdpType::kOffer, pending_remote_sdp_, &err);
+
+      if (!test_desc) {
+        RTC_LOG(LS_WARNING) << "Partial SDP OFFER fragment received – waiting for more (" << err.description << ")";
+        return; // wait for more fragments
       }
+
+      // Full SDP successfully parsed – process it.
+      std::string complete_sdp = pending_remote_sdp_;
+      pending_remote_sdp_.clear();
+      SetRemoteDescription(complete_sdp);
+
    } else if (is_caller() && message.find(Msg::kAnswerPrefix) == 0) {
-      std::string sdp = message.substr(sizeof(Msg::kAnswerPrefix) - 1);
+      // --------------------------------------------------------------
+      // ANSWER (caller side) – may arrive in several TCP fragments.
+      // --------------------------------------------------------------
+      const size_t prefix_len = sizeof(Msg::kAnswerPrefix) - 1; // length of "ANSWER:"
+      std::string sdp_fragment = message.substr(prefix_len);
 
-      // Got an ANSWER from the callee
-      if(sdp.size())
-        SetRemoteDescription(sdp);
-      else
-        RTC_LOG(LS_ERROR) << "Invalid SDP answer received";
+      pending_remote_sdp_ += sdp_fragment;
 
-   } else if (message.find(Msg::kIcePrefix) == 0) {
+      webrtc::SdpParseError err;
+      std::unique_ptr<webrtc::SessionDescriptionInterface> test_desc =
+          webrtc::CreateSessionDescription(webrtc::SdpType::kAnswer, pending_remote_sdp_, &err);
+
+      if (!test_desc) {
+        RTC_LOG(LS_WARNING) << "Partial SDP ANSWER fragment received – waiting for more (" << err.description << ")";
+        return; // Not complete yet
+      }
+
+      std::string complete_sdp = pending_remote_sdp_;
+      pending_remote_sdp_.clear();
+      SetRemoteDescription(complete_sdp);
+    } else if (message.find(Msg::kIcePrefix) == 0) {
       std::string payload = message.substr(sizeof(Msg::kIcePrefix) - 1);
       size_t delim = payload.find(':');
       if (delim == std::string::npos) {
@@ -582,6 +611,11 @@ void DirectPeer::ResetCallStartedFlag() {
     // with a clean slate.
     pending_ip_.clear();
     pending_port_ = 0;
+
+    // Also clear any partially-received SDP that may have accumulated from a
+    // previous (now aborted) connection attempt.  This prevents stale or
+    // corrupted SDP from leaking into the next call.
+    pending_remote_sdp_.clear();
 }
 
 bool DirectPeer::initiateWebRTCCall(const std::string& ip, int port) {

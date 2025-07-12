@@ -126,6 +126,22 @@ void SpeechAudioDeviceFactory::SetTaskQueueFactory(TaskQueueFactory* task_queue_
   _taskQueueFactory.reset(task_queue_factory);
 }
 
+void SpeechAudioDeviceFactory::ResetDevices() {
+  // Ensure any long-running processing threads are stopped before deleting.
+  if (_ttsDevice) {
+    _ttsDevice->stop();
+    _ttsDevice.reset();
+  }
+  if (_whisperDevice) {
+    _whisperDevice->stop();
+    _whisperDevice.reset();
+  }
+  if (_llamaDevice) {
+    _llamaDevice->stop();
+    _llamaDevice.reset();
+  }
+}
+
 AudioDeviceGeneric* SpeechAudioDeviceFactory::CreateSpeechAudioDevice() {
   WhisperAudioDevice* whisper_audio_device = nullptr;
   if(!whisper_audio_device) {

@@ -50,9 +50,10 @@ const size_t kRecordingBufferSize =
     kRecordingFixedSampleRate / 100 * kRecordingNumChannels * 2;
 
 void ttsAudioCallback(bool success, const uint16_t* buffer, size_t buffer_size, void* user_data) {
+  WhisperAudioDevice* audio_device = static_cast<WhisperAudioDevice*>(user_data);
+  if (!audio_device) return;  // Prevent crash if called after destruction
   // Handle audio buffer here
   if(success) {
-    WhisperAudioDevice* audio_device = static_cast<WhisperAudioDevice*>(user_data);
     RTC_LOG(LS_VERBOSE) << "Generated " << buffer_size << " audio samples (" 
       << buffer_size / 16000 << " s)";
     audio_device->SetTTSBuffer(buffer, buffer_size);
@@ -60,10 +61,11 @@ void ttsAudioCallback(bool success, const uint16_t* buffer, size_t buffer_size, 
 }
 
 void whisperResponseCallback(bool success, const char* response, void* user_data) {
+  WhisperAudioDevice* audio_device = static_cast<WhisperAudioDevice*>(user_data);
+  if (!audio_device) return;
   // Handle response here
   RTC_LOG(LS_INFO) << "Whisper response via callback: " << response;
   if(success) {
-    WhisperAudioDevice* audio_device = static_cast<WhisperAudioDevice*>(user_data);
     if(audio_device->_llama_enabled)
       audio_device->askLlama(std::string(response));
     else  
@@ -72,15 +74,18 @@ void whisperResponseCallback(bool success, const char* response, void* user_data
 }
 
 void languageResponseCallback(bool success, const char* language, void* user_data) {
+  WhisperAudioDevice* audio_device = static_cast<WhisperAudioDevice*>(user_data);
+  if (!audio_device) return;
   // Handle response here
   RTC_LOG(LS_INFO) << "Language response via callback: " << language;
 }
 
 void llamaResponseCallback(bool success, const char* response, void* user_data) {
+  WhisperAudioDevice* audio_device = static_cast<WhisperAudioDevice*>(user_data);
+  if (!audio_device) return;
   // Handle response here
   RTC_LOG(LS_INFO) << "Llama response via callback: " << response;
   if(success) {
-    WhisperAudioDevice* audio_device = static_cast<WhisperAudioDevice*>(user_data);
     audio_device->speakText(std::string(response));
   }
 }
@@ -310,27 +315,36 @@ int32_t WhisperAudioDevice::StopRecording() {
 }
 
 void WhisperAudioDevice::SetTTSBuffer(const uint16_t* buffer, size_t buffer_size) {
-  absl::MutexLock lock(&_queueMutex);
-  if (buffer_size == 0) {
-    // End of utterance: nothing to do, or could set a flag if needed
-    RTC_LOG(LS_VERBOSE) << "Received end-of-utterance sentinel";
-    return;
-  }
+    RTC_LOG(LS_INFO) << "[PLAY] SetTTSBuffer called with " << buffer_size << " samples";
 
-  // High-pass filter: y[n] = x[n] - alpha * x[n-1] + alpha * y[n-1]
-  std::vector<uint16_t> filtered_buffer(buffer_size);
-  float alpha = 0.95f;
-  int16_t prev_x = 0, prev_y = 0;
-  for (size_t i = 0; i < buffer_size; ++i) {
-      int16_t x = buffer[i];
-      int16_t y = x - alpha * prev_x + alpha * prev_y;
-      filtered_buffer[i] = y;
-      prev_x = x;
-      prev_y = y;
-  }
-  // Append new samples to the buffer
-  _ttsBuffer.insert(_ttsBuffer.end(), 
-                    filtered_buffer.begin(), filtered_buffer.end());
+    // Define a maximum buffer size to prevent overflow (e.g., 1M samples ~ 1 minute at 16kHz stereo)
+    constexpr size_t kMaxBufferSamples = 1 << 20;  // 1,048,576 samples
+
+    absl::MutexLock lock(&_queueMutex);
+
+    size_t current_size = _ttsBuffer.size();
+    size_t new_size = current_size + buffer_size;
+
+    if (new_size > kMaxBufferSamples) {
+        RTC_LOG(LS_WARNING) << "[PLAY] TTS buffer would exceed max size (" << new_size << " > " << kMaxBufferSamples << "), truncating";
+        // Truncate to fit
+        buffer_size = kMaxBufferSamples - current_size;
+        if (buffer_size == 0) {
+            RTC_LOG(LS_ERROR) << "[PLAY] TTS buffer full, discarding new data";
+            return;
+        }
+        new_size = kMaxBufferSamples;
+    }
+
+    // Reserve space first to avoid multiple reallocations
+    _ttsBuffer.reserve(new_size);
+
+    // Insert the new samples
+    _ttsBuffer.insert(_ttsBuffer.end(), buffer, buffer + buffer_size);
+
+    RTC_LOG(LS_INFO) << "[PLAY] TTS buffer updated, new size: " << _ttsBuffer.size();
+
+    // Removed buffer_cv.notify_one() as it's not used and tied to a different mutex
 }
 
 bool WhisperAudioDevice::RecThreadProcess() {
@@ -487,10 +501,13 @@ int32_t WhisperAudioDevice::InitPlayout() {
     RTC_LOG(LS_INFO) << "TTS enabled...";
   }
 
-  _whisper_transcriber = SpeechAudioDeviceFactory::CreateWhillatsTranscriber(_whisperCallback, _languageCallback);
-  if(_whisper_transcriber && _whisper_transcriber->start()) {
-    _whisper_enabled = true;
-    RTC_LOG(LS_INFO) << "Whisper enabled, model: " << SpeechAudioDeviceFactory::GetWhisperModelFilename() << "...";
+  {
+    std::lock_guard<std::mutex> tlock(_transcriber_mutex);
+    _whisper_transcriber = SpeechAudioDeviceFactory::CreateWhillatsTranscriber(_whisperCallback, _languageCallback);
+    if (_whisper_transcriber && _whisper_transcriber->start()) {
+      _whisper_enabled = true;
+      RTC_LOG(LS_INFO) << "Whisper enabled, model: " << SpeechAudioDeviceFactory::GetWhisperModelFilename() << "...";
+    }
   }
 
   _llama_device = SpeechAudioDeviceFactory::CreateWhillatsLlama(_llamaResponseCallback);
@@ -575,21 +592,40 @@ int32_t WhisperAudioDevice::StopPlayout() {
     std::queue<std::string> empty;
     std::swap(_textQueue, empty);
     _tts->stop();
-  }  
-
-  if(_llama_device) {
-    _llama_device->stop();    
+    _tts = nullptr; // local pointer; factory retains ownership for reuse
   }
 
-  if (_whisper_transcriber) {
-      _whisper_transcriber->stop();
-  }  
+  if (_llama_device) {
+    _llama_device->stop();
+    _llama_device = nullptr;
+  }
+
+  {
+    std::lock_guard<std::mutex> tlock(_transcriber_mutex);
+    if (_whisper_transcriber) {
+        _whisper_transcriber->stop();
+        _whisper_transcriber = nullptr;
+    }
+  }
+
+  // Reset TTS state for next call
+  {
+    absl::MutexLock lock(&_queueMutex);
+    _ttsBuffer.clear();
+    _ttsIndex = 0;
+    std::queue<std::string> empty;
+    std::swap(_textQueue, empty);
+  }
 
   MutexLock lock(&mutex_);
 
   _playoutFramesLeft = 0;
   delete[] _playoutBuffer;
   _playoutBuffer = NULL;
+
+  // Release cached helper devices so that the next AudioDevice instance will
+  // recreate them with fresh callbacks.
+  SpeechAudioDeviceFactory::ResetDevices();
 
   return 0;
 }
@@ -625,8 +661,13 @@ bool WhisperAudioDevice::PlayThreadProcess() {
     }
     #endif // defined(PLAY_WAV_ON_PLAY)
 
-    if(_whisper_transcriber)
-      _whisper_transcriber->processAudioBuffer((uint8_t*)_playoutBuffer, kPlayoutBufferSize);
+    {
+      std::lock_guard<std::mutex> tlock(_transcriber_mutex);
+      if (_whisper_transcriber) {
+        _whisper_transcriber->processAudioBuffer(reinterpret_cast<uint8_t*>(_playoutBuffer),
+                                                kPlayoutBufferSize);
+      }
+    }
  
     _lastCallPlayoutMillis = currentTime;
   }

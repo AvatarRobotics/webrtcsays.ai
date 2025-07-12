@@ -105,7 +105,7 @@ bool DirectCaller::Connect() {
 
         RTC_LOG(LS_INFO) << "Attempting to connect to " << remote_addr_.ToString();
 
-        const int kMaxConnectAttempts = 20; // allow up to ~1 minute total wait
+        const int kMaxConnectAttempts = 5; // reduced from 20 to speed up fallback
         const int kInitialDelayMs = 100; // first retry delay
 
         int attempt = 0;
@@ -141,9 +141,9 @@ bool DirectCaller::Connect() {
                 return false;
             }
 
-            // Exponential back-off, cap to 4 seconds
-            int delay_ms = kInitialDelayMs * (1 << std::min(attempt, 5));
-            delay_ms = std::min(delay_ms, 4000);
+            // Exponential back-off, cap to 1 second (reduced from 4s)
+            int delay_ms = kInitialDelayMs * (1 << std::min(attempt, 3));  // cap exponent to 3 (800ms) then min with 1000
+            delay_ms = std::min(delay_ms, 1000);
             RTC_LOG(LS_INFO) << "Retrying connect in " << delay_ms << " ms";
             std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
         }
@@ -286,7 +286,47 @@ void DirectCaller::OnMessage(rtc::AsyncPacketSocket* socket,
             tcp_socket_->Close();
             tcp_socket_.reset();
         }
-    } else {
+    } 
+    // Handle ANSWER using raw to preserve formatting
+    else if (message.find(Msg::kAnswerPrefix) == 0) {
+        const size_t prefix_len = sizeof(Msg::kAnswerPrefix) - 1; // length of "ANSWER:"
+        std::string sdp_fragment = raw.substr(prefix_len);
+
+        pending_remote_sdp_ += sdp_fragment;
+
+        webrtc::SdpParseError err;
+        std::unique_ptr<webrtc::SessionDescriptionInterface> test_desc =
+            webrtc::CreateSessionDescription(webrtc::SdpType::kAnswer, pending_remote_sdp_, &err);
+
+        if (!test_desc) {
+            RTC_LOG(LS_WARNING) << "Partial SDP ANSWER fragment received – waiting for more (" << err.description << ")";
+            return; // Not complete yet
+        }
+
+        std::string complete_sdp = pending_remote_sdp_;
+        pending_remote_sdp_.clear();
+        SetRemoteDescription(complete_sdp);
+        return;
+    }
+    // Handle ICE using raw to preserve formatting
+    else if (message.find(Msg::kIcePrefix) == 0) {
+        std::string payload = raw.substr(sizeof(Msg::kIcePrefix) - 1);
+        size_t delim = payload.find(':');
+        if (delim == std::string::npos) {
+            RTC_LOG(LS_ERROR) << "Malformed ICE payload received: " << payload;
+        } else {
+            int mline_index = atoi(payload.substr(0, delim).c_str());
+            std::string candidate = payload.substr(delim + 1);
+            if (!candidate.empty()) {
+                RTC_LOG(LS_INFO) << "Received ICE candidate (mline=" << mline_index << ") " << candidate;
+                AddIceCandidate(candidate, mline_index);
+            } else {
+                RTC_LOG(LS_ERROR) << "Invalid ICE candidate received (empty string)";
+            }
+        }
+        return;
+    } 
+    else {
         HandleMessage(socket, message, remote_addr);
     }
 }
@@ -307,6 +347,13 @@ void DirectCaller::Disconnect() {
     // Reset state to allow for a new connection
     tcp_socket_.reset();
     RTC_LOG(LS_INFO) << "Caller state reset for new connection.";
+
+    // Ensure call_started_ and related state are cleared even when the
+    // disconnect happened before we had an established signaling channel
+    // (e.g. raw socket never connected or CANCEL could not be delivered).
+    // This guarantees that the next ADDRESS message we receive will trigger
+    // a fresh dial attempt instead of being queued indefinitely.
+    ResetCallStartedFlag();
 }
 
 // -----------------------------------------------------------------------------
