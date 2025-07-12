@@ -105,7 +105,7 @@ bool DirectCaller::Connect() {
 
         RTC_LOG(LS_INFO) << "Attempting to connect to " << remote_addr_.ToString();
 
-        const int kMaxConnectAttempts = 20; // allow up to ~1 minute total wait
+        const int kMaxConnectAttempts = 5; // reduced from 20 to speed up fallback
         const int kInitialDelayMs = 100; // first retry delay
 
         int attempt = 0;
@@ -141,9 +141,9 @@ bool DirectCaller::Connect() {
                 return false;
             }
 
-            // Exponential back-off, cap to 4 seconds
-            int delay_ms = kInitialDelayMs * (1 << std::min(attempt, 5));
-            delay_ms = std::min(delay_ms, 4000);
+            // Exponential back-off, cap to 1 second (reduced from 4s)
+            int delay_ms = kInitialDelayMs * (1 << std::min(attempt, 3));  // cap exponent to 3 (800ms) then min with 1000
+            delay_ms = std::min(delay_ms, 1000);
             RTC_LOG(LS_INFO) << "Retrying connect in " << delay_ms << " ms";
             std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
         }

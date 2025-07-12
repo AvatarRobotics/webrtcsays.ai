@@ -107,15 +107,6 @@ void DirectApplication::Cleanup() {
   // Explicitly close and release PeerConnection via Shutdown before stopping threads
   ShutdownInternal();
 
-#ifdef WEBRTC_SPEECH_DEVICES
-#if LLAMA_NOTIFICATION_ENABLED
-  if (opts_.llama && llama_) {
-    llama_->stop();
-    llama_ = nullptr;
-  } 
-#endif
-#endif
-
   // Remove sink before closing the connection - handle both local and remote tracks
   if (video_sink_) {
       auto remove_sinks_lambda = [this]() {

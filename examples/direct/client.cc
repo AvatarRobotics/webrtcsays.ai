@@ -289,7 +289,19 @@ void DirectCallerClient::onPeerAddressResolved(const std::string& peer_id,
         // Prefer immediate connect for LAN addresses.
         call_started_ = true;
         APP_LOG(AS_INFO) << "DirectCallerClient: Detected private address – dialing immediately " << ip << ":" << port;
-        std::thread([this, ip, port] { initiateWebRTCCall(ip, port); }).detach();
+        bool connect_success = initiateWebRTCCall(ip, port);
+        if (!connect_success) {
+            APP_LOG(AS_WARNING) << "DirectCallerClient: Connection attempt failed, resetting state and checking for pending address";
+            call_started_ = false;
+            if (!pending_ip_.empty()) {
+                std::string fallback_ip = pending_ip_;
+                int fallback_port = pending_port_;
+                pending_ip_.clear();
+                pending_port_ = 0;
+                APP_LOG(AS_INFO) << "DirectCallerClient: Falling back to queued address " << fallback_ip << ":" << fallback_port;
+                onPeerAddressResolved(peer_id, fallback_ip, fallback_port);  // Recurse to try fallback
+            }
+        }
         return;
     }
 
@@ -307,7 +319,11 @@ void DirectCallerClient::onPeerAddressResolved(const std::string& peer_id,
             pending_ip_.clear();
             pending_port_ = 0;
             APP_LOG(AS_INFO) << "DirectCallerClient: Fallback to public address after wait " << ip_to_dial << ":" << port_to_dial;
-            std::thread([this, ip_to_dial, port_to_dial] { initiateWebRTCCall(ip_to_dial, port_to_dial); }).detach();
+            bool connect_success = initiateWebRTCCall(ip_to_dial, port_to_dial);
+            if (!connect_success) {
+                APP_LOG(AS_WARNING) << "DirectCallerClient: Fallback connection attempt failed, resetting state";
+                call_started_ = false;
+            }
         }
     }).detach();
 }
