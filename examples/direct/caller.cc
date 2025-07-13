@@ -86,6 +86,9 @@ bool DirectCaller::ConnectWithBonjourName(const char* bonjour_name) {
 #endif // #if TARGET_OS_IOS || TARGET_OS_OSX
 
 bool DirectCaller::Connect() {
+    // Update state to Connecting
+    UpdateState(DirectCaller::State::Connecting);
+    
     auto task = [this]() -> bool {
         int raw_socket = -1; // will be set upon successful connection
 
@@ -182,6 +185,7 @@ bool DirectCaller::Connect() {
 
 void DirectCaller::OnConnect(rtc::AsyncPacketSocket* socket) {
     RTC_LOG(LS_INFO) << "Connected to " << remote_addr_.ToString();
+    UpdateState(DirectCaller::State::Connected);  // Update state on successful connection
     
     // Reset handshake tracking state for a fresh connection
     hello_attempts_ = 0;
@@ -278,6 +282,7 @@ void DirectCaller::OnMessage(rtc::AsyncPacketSocket* socket,
         }
     }
     else if (message == StatusCodes::kOk) {
+        UpdateState(DirectCaller::State::Connected);  // Confirm connection
         // We are idle again – let the derived class reset its busy flag.
         ResetCallStartedFlag();
 
@@ -399,3 +404,9 @@ void DirectCaller::ResetCallStartedFlag() {
     hello_attempts_   = 0;
     welcome_received_ = false;
 }
+
+void DirectCaller::SetStateChangeCallback(StateChangeCB cb, void *ctx) {
+    state_cb_  = cb;
+    state_ctx_ = ctx;
+}
+

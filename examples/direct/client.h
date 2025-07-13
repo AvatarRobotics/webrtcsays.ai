@@ -98,7 +98,8 @@ protected:
     bool connected_;
     bool registered_;
     std::string pending_room_;
-    
+    std::atomic<bool> shutting_down_{false};
+
     // Callbacks for peer events
     PeerJoinedCallback peer_joined_callback_;
     PeerListCallback peer_list_callback_;
@@ -134,6 +135,7 @@ class EXPORT_API DirectCallerClient : public DirectCaller {
 protected:
     // For signaling server communication
     std::unique_ptr<DirectClient> signaling_client_;
+    std::atomic<bool> shutting_down_{false};
 
 private:
     bool initialized_ = false;
@@ -198,6 +200,7 @@ private:
 class EXPORT_API DirectCalleeClient : public DirectCallee, public std::enable_shared_from_this<DirectCalleeClient> {
 protected:
     std::unique_ptr<DirectClient> signaling_client_;  // For signaling server communication
+    std::atomic<bool> shutting_down_{false};
 
 private:
     bool initialized_ = false;

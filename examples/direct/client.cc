@@ -69,12 +69,18 @@ bool DirectCallerClient::Connect() {
         this->onPeerJoined(peer_id);
     });
 
-    // Receive direct address resolutions from the signaling server
-    signaling_client_->setAddressReceivedCallback([this](const std::string& user,
-                                                        const std::string& ip,
-                                                        int port) {
-        this->onPeerAddressResolved(user, ip, port);
-    });
+    // Receive ADDRESS:<user>:<ip>:<port> messages for any peer.
+    // We only act on the one that matches opts_.target_name (if set).
+    signaling_client_->setAddressReceivedCallback(
+        [this](const std::string& user_id,
+               const std::string& ip,
+               int               port) {
+            if (shutting_down_) {
+                APP_LOG(AS_INFO) << "Caller shutting down – address ignored";
+                return;
+            }
+            this->onPeerAddressResolved(user_id, ip, port);
+        });
 
     // Try to connect to signaling server for name resolution
     std::string server_host; int server_port_int = 0;
@@ -259,6 +265,8 @@ void DirectCallerClient::onPeerAddressResolved(const std::string& peer_id,
                                                const std::string& ip,
                                                int port) {
 
+    if (shutting_down_.load()) return;
+    
     auto is_private_ip = [](const std::string& addr) {
         return addr.rfind("10.",   0)   == 0 ||
                 addr.rfind("192.168.", 0) == 0 ||
@@ -470,6 +478,8 @@ void DirectCalleeClient::StopListening() {
         signaling_client_->pause();
     }
 
+    shutting_down_.store(true);
+    
     // Disconnect WebRTC and tear down per-connection state without a full cleanup.
     DirectApplication::Disconnect();
 
@@ -817,6 +827,8 @@ void DirectClient::disconnect() {
 bool DirectClient::startTcpServer(int) { return false; }
 
 void DirectClient::handleProtocolMessage(const std::string& message) {
+    if (shutting_down_.load()) return;
+
     APP_LOG(AS_INFO) << "DirectClient received message: " << message;
 
     if (message.rfind(Msg::kHelloPrefix, 0) == 0 || message.rfind(Msg::kHello, 0) == 0) {

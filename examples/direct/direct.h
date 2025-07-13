@@ -506,6 +506,14 @@ class DIRECT_API DirectCallee : public DirectPeer, public sigslot::has_slots<> {
 
 class DIRECT_API DirectCaller : public DirectPeer {
  public:
+  // NEW: Call state enumeration
+  enum class State {
+    Disconnected,
+    Connecting,
+    Connected,
+    Failed
+  };
+
   explicit DirectCaller(Options opts);
   ~DirectCaller() override;
 
@@ -519,7 +527,6 @@ class DIRECT_API DirectCaller : public DirectPeer {
   #endif // #if TARGET_OS_IOS || TARGET_OS_OSX
 #endif
 
-  // bool SendMessage(const std::string& message);
   virtual void Disconnect() override;
 
   // Override to reset caller-specific handshake state (hello counter etc.)
@@ -527,6 +534,21 @@ class DIRECT_API DirectCaller : public DirectPeer {
 
   // Getter for current remote address
   rtc::SocketAddress GetRemoteAddress() const { return remote_addr_; }
+
+  // === State-change C callback API ===
+  using StateChangeCB = void (*)(State new_state, void *ctx);
+  void SetStateChangeCallback(StateChangeCB cb, void *ctx);
+
+  // NEW: Get current state
+  State GetState() const { return state_; }
+
+ protected:
+  // NEW: Update state
+  void UpdateState(State new_state) {
+    if (state_ == new_state) return;
+    state_ = new_state;
+    if (state_cb_) state_cb_(new_state, state_ctx_);
+  }
 
  private:
   // Called when data is received on the socket
@@ -547,12 +569,20 @@ class DIRECT_API DirectCaller : public DirectPeer {
   // Current number of HELLO attempts performed for the active connection
   int hello_attempts_ = 0;
 
+  // NEW: State tracking
+  State state_ = State::Disconnected;
+  std::function<void(State)> on_state_change_;
+
   static constexpr int kMaxHelloAttempts = 5;   // Give up after 5 attempts
 
   rtc::SocketAddress remote_addr_;
 
   // std::unique_ptr<rtc::AsyncTCPSocket> tcp_socket_;
   std::chrono::steady_clock::time_point last_disconnect_time_;
+
+  // callback storage
+  StateChangeCB state_cb_ = nullptr;
+  void        * state_ctx_ = nullptr;
 };
 
 #endif  // __cplusplus
