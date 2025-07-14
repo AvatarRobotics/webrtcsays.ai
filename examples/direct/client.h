@@ -222,9 +222,16 @@ public:
     
 private:
     void onIncomingCall(const std::string& peer_id, const std::string& sdp);
+    // Helper to generate an SDP answer and send it via signaling server
+    void createAndSendAnswer(const std::string& peer_id);
     void setupWebRTCListener();
     void publishAddressToSignalingServer();
     void onIceCandidateReceived(const std::string& peer_id, const std::string& candidate);
+
+    // Send our ICE candidates through the signaling server (overrides DirectPeer behaviour)
+    void OnIceCandidate(const webrtc::IceCandidateInterface* candidate) override;
+    void OnIceConnectionChange(webrtc::PeerConnectionInterface::IceConnectionState new_state) override;
+    void OnConnectionChange(webrtc::PeerConnectionInterface::PeerConnectionState new_state) override;
 };
 
 // ---------------------------------------------------------------------------

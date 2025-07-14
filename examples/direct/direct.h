@@ -458,6 +458,7 @@ class DIRECT_API DirectPeer : public DirectApplication {
   // set.  Each entry stores {mline_index, candidate_sdp}.
   std::vector<std::pair<int, std::string>> pending_ice_candidates_;
 
+protected:
   // Observers are kept in members to extend their lifetime
   rtc::scoped_refptr<LambdaCreateSessionDescriptionObserver> create_session_observer_;
   rtc::scoped_refptr<LambdaSetLocalDescriptionObserver>      set_local_description_observer_;

@@ -419,6 +419,35 @@ bool DirectCalleeClient::StartListening() {
         APP_LOG(AS_INFO) << "DirectCalleeClient: Received offer from " << peer_id;
         this->onIncomingCall(peer_id, sdp);
     });
+
+    signaling_client_->setIceCandidateReceivedCallback([this](const std::string& peer_id, const std::string& candidate_json) {
+        APP_LOG(AS_INFO) << "DirectCalleeClient: ICE candidate received from " << peer_id;
+
+        // Only act on our current peer, ignore others.
+        if (!opts_.target_name.empty() && peer_id != opts_.target_name) {
+            return;
+        }
+
+        std::string cand_str = candidate_json;
+        int mline_index = 0;
+
+        if (!candidate_json.empty() && candidate_json.front() == '{') {
+            Json::CharReaderBuilder rb;
+            std::unique_ptr<Json::CharReader> reader(rb.newCharReader());
+            Json::Value root;
+            std::string errs;
+            if (reader->parse(candidate_json.c_str(), candidate_json.c_str() + candidate_json.size(), &root, &errs)) {
+                if (root.isMember("candidate")) {
+                    cand_str = root["candidate"].asString();
+                }
+                if (root.isMember("sdpMLineIndex")) {
+                    mline_index = root["sdpMLineIndex"].asInt();
+                }
+            }
+        }
+
+        this->AddIceCandidate(cand_str, mline_index);
+    });
     
     // Try to connect to signaling server to register our presence
     // But don't fail if signaling server is unavailable
@@ -636,8 +665,139 @@ void DirectCalleeClient::publishAddressToSignalingServer() {
 }
 
 void DirectCalleeClient::onIncomingCall(const std::string& peer_id, const std::string& sdp) {
-    // This would be handled by DirectCallee's internal WebRTC logic
     APP_LOG(AS_INFO) << "DirectCalleeClient: Incoming call from peer: " << peer_id;
+
+    if (shutting_down_.load()) {
+        APP_LOG(AS_INFO) << "DirectCalleeClient: Shutting down, ignoring incoming call from " << peer_id;
+        return;
+    }
+
+    // If we are already in a call, politely reject the new one.
+    if (peer_connection()) {
+        APP_LOG(AS_WARNING) << "DirectCalleeClient: Already in a call, rejecting new call from " << peer_id;
+        if (signaling_client_) {
+            signaling_client_->sendCancel(); // Inform caller we are busy
+        }
+        return;
+    }
+
+    // Ensure WebRTC layer is initialized and listening.
+    if (!initialized_) {
+        APP_LOG(AS_ERROR) << "DirectCalleeClient: Not initialized, cannot accept call";
+        return;
+    }
+
+    if (!listening_) {
+        APP_LOG(AS_INFO) << "DirectCalleeClient: Not listening, starting WebRTC listener";
+        setupWebRTCListener();
+        listening_ = true;
+    }
+
+    // We must have a valid PeerConnection to handle the offer.
+    if (!peer_connection()) {
+        if (!CreatePeerConnection()) {
+            APP_LOG(AS_ERROR) << "DirectCalleeClient: Failed to create PeerConnection";
+            return;
+        }
+    }
+
+    // Process the incoming SDP offer.
+    if (!sdp.empty()) {
+        std::string raw_sdp = sdp;
+        if (!sdp.empty() && sdp.front() == '{') {
+            // Attempt to parse JSON‐wrapped SessionDescription.
+            Json::CharReaderBuilder rbuilder;
+            std::unique_ptr<Json::CharReader> reader(rbuilder.newCharReader());
+            Json::Value root;
+            std::string errs;
+            if (reader->parse(sdp.c_str(), sdp.c_str() + sdp.size(), &root, &errs)) {
+                if (root.isMember("sdp")) {
+                    if (root["sdp"].isString()) {
+                        raw_sdp = root["sdp"].asString();
+                    } else if (root["sdp"].isObject() && root["sdp"].isMember("sdp")) {
+                        raw_sdp = root["sdp"]["sdp"].asString();
+                    }
+                }
+            }
+        }
+
+        webrtc::SdpParseError err;
+        std::unique_ptr<webrtc::SessionDescriptionInterface> offer_desc =
+            webrtc::CreateSessionDescription(webrtc::SdpType::kOffer, raw_sdp, &err);
+        if (!offer_desc) {
+            APP_LOG(AS_ERROR) << "DirectCalleeClient: Failed to parse offer SDP from " << peer_id << ": " << err.description;
+            return;
+        }
+
+        // Set the remote description asynchronously, then generate the answer.
+        set_remote_description_observer_ = rtc::make_ref_counted<LambdaSetRemoteDescriptionObserver>(
+            [this, peer_id](webrtc::RTCError error) {
+                if (!error.ok()) {
+                    APP_LOG(AS_ERROR) << "DirectCalleeClient: Failed to set remote description: " << error.message();
+                    return;
+                }
+                APP_LOG(AS_INFO) << "DirectCalleeClient: Remote description set – creating answer";
+                this->createAndSendAnswer(peer_id);
+            });
+
+        peer_connection()->SetRemoteDescription(std::move(offer_desc), set_remote_description_observer_);
+    } else {
+        APP_LOG(AS_INFO) << "DirectCalleeClient: No SDP provided with HELLO; waiting for OFFER";
+    }
+}
+
+// Helper that creates an SDP answer and sends it back via the signaling server
+void DirectCalleeClient::createAndSendAnswer(const std::string& peer_id) {
+    if (!peer_connection()) {
+        APP_LOG(AS_ERROR) << "DirectCalleeClient: Cannot create answer – peer connection is null";
+        return;
+    }
+
+    webrtc::PeerConnectionInterface::RTCOfferAnswerOptions answer_opts;
+
+    create_session_observer_ = rtc::make_ref_counted<LambdaCreateSessionDescriptionObserver>(
+        [this, peer_id](std::unique_ptr<webrtc::SessionDescriptionInterface> desc) {
+            std::string local_sdp;
+            desc->ToString(&local_sdp);
+
+            // Force DTLS role to passive to avoid both sides negotiating as active (client)
+            const std::string kSetupActive = "a=setup:active";
+            const std::string kSetupPassive = "a=setup:passive";
+            size_t setup_pos = local_sdp.find(kSetupActive);
+            if (setup_pos != std::string::npos) {
+                APP_LOG(AS_INFO) << "DirectCalleeClient: Replacing setup:active with setup:passive in SDP answer to prevent DTLS role conflict.";
+                local_sdp.replace(setup_pos, kSetupActive.size(), kSetupPassive);
+            }
+
+            set_local_description_observer_ = rtc::make_ref_counted<LambdaSetLocalDescriptionObserver>(
+                [this, peer_id, local_sdp](webrtc::RTCError error) {
+                    if (!error.ok()) {
+                        APP_LOG(AS_ERROR) << "DirectCalleeClient: Failed to set local description: " << error.message();
+                        return;
+                    }
+                    APP_LOG(AS_INFO) << "DirectCalleeClient: Local description set – sending ANSWER to " << peer_id;
+
+                    // Wrap SDP into JSON similar to incoming offer for browser compatibility.
+                    Json::Value root;
+                    Json::Value sdpObj;
+                    sdpObj["type"] = "answer";
+                    sdpObj["sdp"]  = local_sdp;
+                    root["sdp"] = sdpObj;
+                    Json::StreamWriterBuilder wbuilder;
+                    wbuilder["indentation"] = ""; // no pretty print
+                    std::string json_answer = Json::writeString(wbuilder, root);
+
+                    if (signaling_client_) {
+                        signaling_client_->sendAnswer(peer_id, json_answer);
+                    } else {
+                        APP_LOG(AS_ERROR) << "DirectCalleeClient: signaling_client_ is null – cannot send ANSWER";
+                    }
+                });
+
+            peer_connection()->SetLocalDescription(std::move(desc), set_local_description_observer_);
+        });
+
+    peer_connection()->CreateAnswer(create_session_observer_.get(), answer_opts);
 }
 
 void DirectCalleeClient::onIceCandidateReceived(const std::string& peer_id, const std::string& candidate) {
@@ -645,6 +805,85 @@ void DirectCalleeClient::onIceCandidateReceived(const std::string& peer_id, cons
     APP_LOG(AS_INFO) << "DirectCalleeClient: ICE candidate received from " << peer_id;
 }
 
+// -----------------------------------------------------------------------------
+// DirectCalleeClient ICE handling
+
+void DirectCalleeClient::OnIceCandidate(const webrtc::IceCandidateInterface* candidate) {
+    // Convert candidate to string
+    std::string sdp;
+    if (!candidate->ToString(&sdp)) {
+        APP_LOG(AS_ERROR) << "DirectCalleeClient: Failed to serialize ICE candidate";
+        return;
+    }
+
+    int mline_index = candidate->sdp_mline_index();
+
+    // Build JSON payload compatible with browser side
+    Json::Value root;
+    root["candidate"] = sdp;
+    root["sdpMid"] = candidate->sdp_mid();
+    root["sdpMLineIndex"] = mline_index;
+    Json::StreamWriterBuilder wbuilder;
+    wbuilder["indentation"] = "";
+    std::string json_candidate = Json::writeString(wbuilder, root);
+
+    APP_LOG(AS_INFO) << "DirectCalleeClient: Sending ICE candidate: " << json_candidate;
+
+    if (signaling_client_) {
+        signaling_client_->sendIceCandidate(opts_.target_name.empty() ? "" : opts_.target_name, json_candidate);
+    } else {
+        APP_LOG(AS_ERROR) << "DirectCalleeClient: signaling_client_ is null - cannot send ICE candidate";
+    }
+
+    // Optionally still call base to keep internal bookkeeping but suppress raw socket send
+    // We skip DirectPeer::OnIceCandidate to avoid SendMessage use.
+}
+
+void DirectCalleeClient::OnIceConnectionChange(webrtc::PeerConnectionInterface::IceConnectionState new_state) {
+    DirectCallee::OnIceConnectionChange(new_state);
+    std::string state_name;
+    switch (new_state) {
+        case webrtc::PeerConnectionInterface::kIceConnectionNew: state_name = "New"; break;
+        case webrtc::PeerConnectionInterface::kIceConnectionChecking: state_name = "Checking"; break;
+        case webrtc::PeerConnectionInterface::kIceConnectionConnected: state_name = "Connected"; break;
+        case webrtc::PeerConnectionInterface::kIceConnectionCompleted: state_name = "Completed"; break;
+        case webrtc::PeerConnectionInterface::kIceConnectionFailed: state_name = "Failed"; break;
+        case webrtc::PeerConnectionInterface::kIceConnectionDisconnected: state_name = "Disconnected"; break;
+        case webrtc::PeerConnectionInterface::kIceConnectionClosed: state_name = "Closed"; break;
+        default: state_name = "Unknown(" + std::to_string(static_cast<int>(new_state)) + ")"; break;
+    }
+    APP_LOG(AS_INFO) << "DirectCalleeClient: ICE connection state changed to: " << state_name;
+    if (new_state == webrtc::PeerConnectionInterface::kIceConnectionFailed ||
+        new_state == webrtc::PeerConnectionInterface::kIceConnectionDisconnected) {
+        APP_LOG(AS_WARNING) << "DirectCalleeClient: ICE connection failed or disconnected, media may not flow.";
+    } else if (new_state == webrtc::PeerConnectionInterface::kIceConnectionConnected ||
+               new_state == webrtc::PeerConnectionInterface::kIceConnectionCompleted) {
+        APP_LOG(AS_INFO) << "DirectCalleeClient: ICE connection established, media should flow if DTLS is complete.";
+    }
+}
+
+void DirectCalleeClient::OnConnectionChange(webrtc::PeerConnectionInterface::PeerConnectionState new_state) {
+    DirectCallee::OnConnectionChange(new_state);
+    std::string state_name;
+    switch (new_state) {
+        case webrtc::PeerConnectionInterface::PeerConnectionState::kNew: state_name = "New"; break;
+        case webrtc::PeerConnectionInterface::PeerConnectionState::kConnecting: state_name = "Connecting"; break;
+        case webrtc::PeerConnectionInterface::PeerConnectionState::kConnected: state_name = "Connected"; break;
+        case webrtc::PeerConnectionInterface::PeerConnectionState::kDisconnected: state_name = "Disconnected"; break;
+        case webrtc::PeerConnectionInterface::PeerConnectionState::kFailed: state_name = "Failed"; break;
+        case webrtc::PeerConnectionInterface::PeerConnectionState::kClosed: state_name = "Closed"; break;
+        default: state_name = "Unknown(" + std::to_string(static_cast<int>(new_state)) + ")"; break;
+    }
+    APP_LOG(AS_INFO) << "DirectCalleeClient: Peer connection state changed to: " << state_name;
+    if (new_state == webrtc::PeerConnectionInterface::PeerConnectionState::kConnected) {
+        APP_LOG(AS_INFO) << "DirectCalleeClient: Peer connection fully established, media should be flowing.";
+    } else if (new_state == webrtc::PeerConnectionInterface::PeerConnectionState::kFailed ||
+               new_state == webrtc::PeerConnectionInterface::PeerConnectionState::kDisconnected) {
+        APP_LOG(AS_WARNING) << "DirectCalleeClient: Peer connection failed or disconnected, media will not flow.";
+    }
+}
+
+// Removed OnDtlsStateChange due to missing enum values in this WebRTC version
 // -----------------------------------------------------------------------------
 // DirectClient Implementation (restored)
 
@@ -939,6 +1178,11 @@ void DirectClient::handleProtocolMessage(const std::string& message) {
             }
         } else {
             APP_LOG(AS_WARNING) << "Malformed ICE message: " << message;
+        }
+    }
+    else if (message.front() == '{' && message.find("\"candidate\"") != std::string::npos) {
+        if (ice_candidate_received_callback_) {
+            ice_candidate_received_callback_("unknown_peer", message);
         }
     }
 }
