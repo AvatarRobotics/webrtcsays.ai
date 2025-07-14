@@ -359,6 +359,7 @@ bool DirectCallerClient::RequestUserList() {
 
 DirectCalleeClient::DirectCalleeClient(const Options& opts)
     : DirectCallee(opts), initialized_(false), listening_(false) {
+    active_peer_id_ = "";
     // Let the OS pick an available port (0) so each new session is guaranteed
     // to bind successfully even if the previous one is still in TIME_WAIT.
     local_port_ = 0;
@@ -666,6 +667,7 @@ void DirectCalleeClient::publishAddressToSignalingServer() {
 
 void DirectCalleeClient::onIncomingCall(const std::string& peer_id, const std::string& sdp) {
     APP_LOG(AS_INFO) << "DirectCalleeClient: Incoming call from peer: " << peer_id;
+    active_peer_id_ = peer_id; // remember for ICE candidate routing
 
     if (shutting_down_.load()) {
         APP_LOG(AS_INFO) << "DirectCalleeClient: Shutting down, ignoring incoming call from " << peer_id;
@@ -763,10 +765,28 @@ void DirectCalleeClient::createAndSendAnswer(const std::string& peer_id) {
             // Force DTLS role to passive to avoid both sides negotiating as active (client)
             const std::string kSetupActive = "a=setup:active";
             const std::string kSetupPassive = "a=setup:passive";
-            size_t setup_pos = local_sdp.find(kSetupActive);
-            if (setup_pos != std::string::npos) {
-                APP_LOG(AS_INFO) << "DirectCalleeClient: Replacing setup:active with setup:passive in SDP answer to prevent DTLS role conflict.";
+            size_t setup_pos = 0;
+            bool patched = false;
+            while ((setup_pos = local_sdp.find(kSetupActive, setup_pos)) != std::string::npos) {
                 local_sdp.replace(setup_pos, kSetupActive.size(), kSetupPassive);
+                setup_pos += kSetupPassive.size();
+                patched = true;
+            }
+            if (patched) {
+                APP_LOG(AS_INFO) << "DirectCalleeClient: Patched all setup:active lines to passive in SDP answer.";
+                APP_LOG(AS_INFO) << "DirectCalleeClient: SDP answer: " << local_sdp;
+            } else {
+                APP_LOG(AS_WARNING) << "DirectCalleeClient: No setup:active found to patch – DTLS role may already be passive.";
+            }
+
+            // Create a new SessionDescription from the potentially modified SDP so that
+            // the PeerConnection uses the same (passive) DTLS role we will send to the browser.
+            webrtc::SdpParseError parse_err;
+            std::unique_ptr<webrtc::SessionDescriptionInterface> patched_desc =
+                webrtc::CreateSessionDescription(desc->GetType(), local_sdp, &parse_err);
+            if (!patched_desc) {
+                APP_LOG(AS_ERROR) << "DirectCalleeClient: Failed to create patched SessionDescription: " << parse_err.description;
+                return;
             }
 
             set_local_description_observer_ = rtc::make_ref_counted<LambdaSetLocalDescriptionObserver>(
@@ -794,7 +814,7 @@ void DirectCalleeClient::createAndSendAnswer(const std::string& peer_id) {
                     }
                 });
 
-            peer_connection()->SetLocalDescription(std::move(desc), set_local_description_observer_);
+            peer_connection()->SetLocalDescription(std::move(patched_desc), set_local_description_observer_);
         });
 
     peer_connection()->CreateAnswer(create_session_observer_.get(), answer_opts);
@@ -829,8 +849,9 @@ void DirectCalleeClient::OnIceCandidate(const webrtc::IceCandidateInterface* can
 
     APP_LOG(AS_INFO) << "DirectCalleeClient: Sending ICE candidate: " << json_candidate;
 
+    const std::string target_id = !active_peer_id_.empty() ? active_peer_id_ : opts_.target_name;
     if (signaling_client_) {
-        signaling_client_->sendIceCandidate(opts_.target_name.empty() ? "" : opts_.target_name, json_candidate);
+        signaling_client_->sendIceCandidate(target_id, json_candidate);
     } else {
         APP_LOG(AS_ERROR) << "DirectCalleeClient: signaling_client_ is null - cannot send ICE candidate";
     }
@@ -1030,7 +1051,7 @@ bool DirectClient::sendAnswer(const std::string& target_peer_id, const std::stri
 
 bool DirectClient::sendIceCandidate(const std::string& target_peer_id, const std::string& candidate) {
     if (!connected_) return false;
-    std::string msg = "ICE:" + user_id_ + ":" + candidate;
+    std::string msg = "ICE:" + target_peer_id + ":" + candidate;
     return ws_client_->send_message(msg);
 }
 

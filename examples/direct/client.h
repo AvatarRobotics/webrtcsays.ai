@@ -201,6 +201,7 @@ class EXPORT_API DirectCalleeClient : public DirectCallee, public std::enable_sh
 protected:
     std::unique_ptr<DirectClient> signaling_client_;  // For signaling server communication
     std::atomic<bool> shutting_down_{false};
+    std::string active_peer_id_;
 
 private:
     bool initialized_ = false;

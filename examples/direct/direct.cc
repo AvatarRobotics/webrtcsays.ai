@@ -726,25 +726,31 @@ bool DirectApplication::CreatePeerConnection() {
   
   std::vector<cricket::RelayServerConfig> turn_servers;
 
-  if(opts_.turns.size()) {
+  //if(opts_.turns.size()) {
     // Support multiple TURN server definitions separated by ';' (produced when
     // JSON config used an array). Each element keeps the original
     // "uri,username,password" triple.
-    std::vector<std::string> server_entries = stringSplit(opts_.turns, ";");
+    std::vector<std::string> server_entries;
+    server_entries.push_back("turn:3.93.50.189:5349?transport=udp,webrtcsays.ai,wilddolphin");
     for(const auto& entry : server_entries) {
         std::vector<std::string> turnsParams = stringSplit(entry, ",");
         if(turnsParams.size() != 3) {
             RTC_LOG(LS_WARNING) << "TURN entry has " << turnsParams.size() << " segments, expected 3 – skipped: " << entry;
             continue;
         }
+
         webrtc::PeerConnectionInterface::IceServer iceServer;
         iceServer.uri = turnsParams[0];
         iceServer.username = turnsParams[1];
         iceServer.password = turnsParams[2];
+
+        RTC_LOG(LS_INFO) << "TURN config: uri=" << iceServer.uri
+                         << " user='" << iceServer.username
+                         << "' pass='" << iceServer.password << "'";
         iceServer.tls_cert_policy = webrtc::PeerConnectionInterface::kTlsCertPolicyInsecureNoCheck;
         config.servers.push_back(iceServer);
     }
-  }
+  //}
 
   // Use default STUN server configuration to avoid complexity
 
@@ -767,7 +773,11 @@ bool DirectApplication::CreatePeerConnection() {
           size_t colon_pos = host_port.find(':');
           if (colon_pos != std::string::npos) {
               cricket::RelayServerConfig turn_config;
-              turn_config.credentials = cricket::RelayCredentials(server.username, server.password);
+              // Trim username/password just in case
+              std::string cred_user = server.username;
+              std::string cred_pass = server.password;
+              turn_config.credentials = cricket::RelayCredentials(cred_user, cred_pass);
+              RTC_LOG(LS_INFO) << "TURN relay credentials user='" << cred_user << "'";
 
               // Determine desired protocol: default UDP, but respect "?transport=tcp" or "?transport=udp"
               cricket::ProtocolType proto = cricket::PROTO_UDP;
