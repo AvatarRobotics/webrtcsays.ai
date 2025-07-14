@@ -752,6 +752,9 @@ bool DirectApplication::CreatePeerConnection() {
     }
   //}
 
+  config.disable_ipv6_on_wifi = true;            // Wi-Fi only
+  config.max_ipv6_networks     = 0;   
+
   // Use default STUN server configuration to avoid complexity
 
   for (const auto& server : config.servers) {
