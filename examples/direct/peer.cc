@@ -440,6 +440,7 @@ void DirectPeer::SetRemoteDescription(const std::string& sdp) {
                             desc->ToString(&sdp);
                             
                             // Ensure DTLS role is passive (server) on callee side to avoid role conflict.
+                            #if 0
                             const std::string kActive = "a=setup:active";
                             const std::string kPassive = "a=setup:passive";
                             size_t pos = 0;
@@ -452,7 +453,7 @@ void DirectPeer::SetRemoteDescription(const std::string& sdp) {
                             if (patched) {
                                 RTC_LOG(LS_INFO) << "DirectPeer(callee): patched setup:active → passive in SDP answer.";
                             }
-
+                            #endif
                             webrtc::SdpParseError perr;
                             std::unique_ptr<webrtc::SessionDescriptionInterface> patched_desc =
                                 webrtc::CreateSessionDescription(desc->GetType(), sdp, &perr);

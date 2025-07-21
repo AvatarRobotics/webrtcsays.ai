@@ -762,6 +762,7 @@ void DirectCalleeClient::createAndSendAnswer(const std::string& peer_id) {
             std::string local_sdp;
             desc->ToString(&local_sdp);
 
+            #if 0
             // Force DTLS role to passive to avoid both sides negotiating as active (client)
             const std::string kSetupActive = "a=setup:active";
             const std::string kSetupPassive = "a=setup:passive";
@@ -778,7 +779,7 @@ void DirectCalleeClient::createAndSendAnswer(const std::string& peer_id) {
             } else {
                 APP_LOG(AS_WARNING) << "DirectCalleeClient: No setup:active found to patch – DTLS role may already be passive.";
             }
-
+            #endif
             // Create a new SessionDescription from the potentially modified SDP so that
             // the PeerConnection uses the same (passive) DTLS role we will send to the browser.
             webrtc::SdpParseError parse_err;

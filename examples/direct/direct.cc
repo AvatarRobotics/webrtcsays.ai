@@ -731,7 +731,7 @@ bool DirectApplication::CreatePeerConnection() {
     // JSON config used an array). Each element keeps the original
     // "uri,username,password" triple.
     std::vector<std::string> server_entries;
-    server_entries.push_back("turn:3.93.50.189:5349?transport=udp,webrtcsays.ai,wilddolphin");
+    server_entries.push_back("turn:3.93.50.189:5349?transport=tcp,webrtcsays.ai,wilddolphin");
     for(const auto& entry : server_entries) {
         std::vector<std::string> turnsParams = stringSplit(entry, ",");
         if(turnsParams.size() != 3) {
