@@ -439,6 +439,29 @@ void DirectPeer::SetRemoteDescription(const std::string& sdp) {
                             std::string sdp;
                             desc->ToString(&sdp);
                             
+                            // Ensure DTLS role is passive (server) on callee side to avoid role conflict.
+                            #if 0
+                            const std::string kActive = "a=setup:active";
+                            const std::string kPassive = "a=setup:passive";
+                            size_t pos = 0;
+                            bool patched = false;
+                            while ((pos = sdp.find(kActive, pos)) != std::string::npos) {
+                                sdp.replace(pos, kActive.size(), kPassive);
+                                pos += kPassive.size();
+                                patched = true;
+                            }
+                            if (patched) {
+                                RTC_LOG(LS_INFO) << "DirectPeer(callee): patched setup:active → passive in SDP answer.";
+                            }
+                            #endif
+                            webrtc::SdpParseError perr;
+                            std::unique_ptr<webrtc::SessionDescriptionInterface> patched_desc =
+                                webrtc::CreateSessionDescription(desc->GetType(), sdp, &perr);
+                            if (!patched_desc) {
+                                RTC_LOG(LS_ERROR) << "Failed to reparse patched SDP: " << perr.description;
+                                return;
+                            }
+
                             set_local_description_observer_ = rtc::make_ref_counted<LambdaSetLocalDescriptionObserver>(
                                 [this, sdp](webrtc::RTCError error) {
                                     if (!error.ok()) {
@@ -454,8 +477,7 @@ void DirectPeer::SetRemoteDescription(const std::string& sdp) {
                                     DrainPendingIceCandidates();
                                     SendMessage(std::string(Msg::kAnswerPrefix) + sdp);
                             });
-
-                            peer_connection_->SetLocalDescription(std::move(desc), set_local_description_observer_);
+                            peer_connection_->SetLocalDescription(std::move(patched_desc), set_local_description_observer_);
                         });
                         
                     peer_connection_->CreateAnswer(
