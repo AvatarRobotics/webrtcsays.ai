@@ -87,8 +87,17 @@
 
 #include <system_wrappers/include/clock.h>
 #include <system_wrappers/include/field_trial.h>
+#include "test/vcm_capturer.h"
 
 #include <modules/third_party/whillats/src/whillats.h>
+
+namespace webrtc {
+namespace test {
+class VcmCapturer;
+} // namespace test
+} // namespace webrtc
+
+class CameraFrameSink; // forward declaration
 
 // Include TargetConditionals for TARGET_OS_IOS or TARGET_OS_OSX macros
 #if defined(__APPLE__)
@@ -430,6 +439,9 @@ class DIRECT_API DirectPeer : public DirectApplication {
   // failures are logged and reported via the boolean return value.
   bool initiateWebRTCCall(const std::string& ip, int port);
 
+  std::vector<std::unique_ptr<webrtc::test::VcmCapturer>> &capturers() { return capturers_; }
+  std::vector<std::unique_ptr<CameraFrameSink>>           &sinks() { return sinks_; }
+
  protected:
   // When large OFFER/ANSWER SDP blobs are sent over the raw TCP signalling
   // channel they may arrive split across multiple packets.  We buffer the
@@ -453,7 +465,14 @@ class DIRECT_API DirectPeer : public DirectApplication {
  
   rtc::scoped_refptr<webrtc::AudioTrackInterface> audio_track_;
 
- private:
+  // Own the lifetime of active camera capturers/sinks so no globals are needed.
+  std::vector<std::unique_ptr<webrtc::test::VcmCapturer>> capturers_;
+  std::vector<std::unique_ptr<CameraFrameSink>>           sinks_;
+
+  // Grant helper access to protected members for camera resource storage
+  friend rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> CreateCameraVideoSource(class DirectPeer*, const Options&);
+
+  private:
   // ICE candidates that arrive before both local and remote descriptions are
   // set.  Each entry stores {mline_index, candidate_sdp}.
   std::vector<std::pair<int, std::string>> pending_ice_candidates_;

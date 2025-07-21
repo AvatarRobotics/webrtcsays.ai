@@ -21,6 +21,17 @@
 #include "rtc_base/crypto_random.h"
 
 #include <json/json.h> // Use jsoncpp header
+#include <algorithm>
+
+// Utility to remove surrounding single or double quotes from a string.
+static std::string stripQuotes(const std::string& s) {
+    if (s.size() >= 2) {
+        if ((s.front() == '"' && s.back() == '"') || (s.front() == '\'' && s.back() == '\'')) {
+            return s.substr(1, s.size() - 2);
+        }
+    }
+    return s;
+}
 
 #include "direct.h"
 #include "option.h"
@@ -97,19 +108,42 @@ bool DIRECT_API ParseIpAndPort(const std::string& ip_port, std::string& ip, int&
   return true;
 }
 
+// Basic split that honours quotes – only used for cmd-line string variant.
 std::vector<std::string> stringSplit(std::string input, std::string delimiter)
 {
-    std::vector<std::string> tokens;
-    size_t pos = 0;
-    std::string token;
-
-    while((pos = input.find(delimiter)) != std::string::npos){
-        token = input.substr(0, pos);
-        tokens.push_back(token);
-        input.erase(0, pos + 1);
+    if (delimiter != " ") {
+        // retain old simple behaviour for non-space delimiter callers.
+        std::vector<std::string> tokens;
+        size_t pos = 0;
+        std::string token;
+        while((pos = input.find(delimiter)) != std::string::npos){
+            token = input.substr(0, pos);
+            tokens.push_back(token);
+            input.erase(0, pos + delimiter.size());
+        }
+        tokens.push_back(input);
+        return tokens;
     }
 
-    tokens.push_back(input);
+    std::vector<std::string> tokens;
+    std::string current;
+    bool in_quotes = false;
+    for (size_t i = 0; i < input.size(); ++i) {
+        char c = input[i];
+        if (c == '"') {
+            in_quotes = !in_quotes;
+            continue; // drop the quote char itself
+        }
+        if (c == ' ' && !in_quotes) {
+            if (!current.empty()) {
+                tokens.push_back(current);
+                current.clear();
+            }
+        } else {
+            current.push_back(c);
+        }
+    }
+    if (!current.empty()) tokens.push_back(current);
     return tokens;
 }
 
@@ -151,6 +185,7 @@ Options parseOptions(const std::vector<std::string>& args) {
       "  --turns=<ip,username,password>     Secured turn server address, e.g. \n"
       "   'turns:global.relay.metered.ca:443?transport=tcp,<username>,<password>'\n"
       "  --vpn=<interface_name>             Specify VPN interface name\n" // Added VPN help
+      "  --camera=<device_name>             Specify camera device name\n" // Added camera help
       "  --bonjour_name=<name>              Specify bonjour name\n" // Added bonjour name resolution
       "  --user_name=<name>                 Your user name for registration\n"
       "  --target_name=<name>               Target user name to call (caller mode)\n"
@@ -283,6 +318,10 @@ Options parseOptions(const std::vector<std::string>& args) {
              RTC_LOG(LS_INFO) << "Config vpn: " << config_json["vpn"].asString(); // Log value
              opts.vpn = config_json["vpn"].asString();
         }
+        if (config_json.isMember("camera") && config_json["camera"].isString()) {
+             RTC_LOG(LS_INFO) << "Config camera: " << config_json["camera"].asString(); // Log value
+             opts.camera = config_json["camera"].asString();
+        }
         if (config_json.isMember("bonjour_name") && config_json["bonjour_name"].isString()) {
              RTC_LOG(LS_INFO) << "Config bonjour_name: " << config_json["bonjour_name"].asString();
              opts.bonjour_name = config_json["bonjour_name"].asString();
@@ -407,6 +446,8 @@ Options parseOptions(const std::vector<std::string>& args) {
       opts.turns.erase(remove(opts.turns.begin(), opts.turns.end(), '\''), opts.turns.end());
     } else if (arg.find("--vpn=") == 0) { 
         opts.vpn = arg.substr(6);
+    } else if (arg.find("--camera=") == 0) {
+        opts.camera = stripQuotes(arg.substr(9)); // length of "--camera=" is 9
     } else if (arg.find("--bonjour_name=") == 0) {
         opts.bonjour_name = arg.substr(15);
     } else if (arg.find("--user_name=") == 0) {
@@ -540,6 +581,7 @@ std::string getUsage(const Options opts) {
         << opts.webrtc_speech_initial_playout_wav << "\\n";
   usage << "TURN Server: " << (!opts.turns.empty() ? opts.turns : "(not set)") << "\\n";
   usage << "VPN Interface: " << (!opts.vpn.empty() ? opts.vpn : "(not set)") << "\\n";
+  usage << "Camera: " << (!opts.camera.empty() ? opts.camera : "(not set)") << "\\n";
   if (!opts.config_path.empty()) {
       usage << "Config File Used: " << opts.config_path << "\\n";
   }

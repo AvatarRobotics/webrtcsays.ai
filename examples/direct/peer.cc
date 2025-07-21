@@ -13,6 +13,8 @@
 #include <string>
 #include <vector>
 #include <thread>
+#include <algorithm>
+#include <cctype>
 
 #include "api/peer_connection_interface.h"
 #include "api/rtc_event_log/rtc_event_log.h"
@@ -26,8 +28,182 @@
 #include "rtc_base/ref_counted_object.h"
 #include "api/video/video_frame.h"
 #include "rtc_base/logging.h"
-
+#include "option.h"
 #include "direct.h"
+#include "pc/test/fake_video_track_source.h"
+#include "test/vcm_capturer.h"
+#include "test/test_video_capturer.cc"
+#include "test/vcm_capturer.cc"
+
+// Helper sink that forwards captured frames to a FakeVideoTrackSource so that
+// the source can be used as a regular WebRTC VideoTrackSourceInterface.
+class CameraFrameSink : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+ public:
+  explicit CameraFrameSink(const rtc::scoped_refptr<webrtc::FakeVideoTrackSource>& src)
+      : src_(src) {}
+
+  void OnFrame(const webrtc::VideoFrame& frame) override {
+    if (src_) {
+      src_->InjectFrame(frame);
+    }
+  }
+
+ private:
+  rtc::scoped_refptr<webrtc::FakeVideoTrackSource> src_;
+};
+
+// helper to trim whitespace
+auto trim = [](std::string s){
+    size_t start = s.find_first_not_of(" \t\n\r");
+    size_t end   = s.find_last_not_of(" \t\n\r");
+    if (start==std::string::npos) return std::string();
+    return s.substr(start, end-start+1);
+};
+
+// Parse camera option of the form "<index>[,<width>x<height>@<fps>]" or
+// "<name>[,<width>x<height>@<fps>]". Missing parts fall back to defaults.
+static bool ParseCameraSpec(const std::string& spec,
+                            std::string* out_device,
+                            size_t* out_index,
+                            int* out_width,
+                            int* out_height,
+                            int* out_fps) {
+  if (spec.empty()) return false;
+
+  std::string cleaned = spec;
+  if (cleaned.size()>=2 && ((cleaned.front()=='"'&&cleaned.back()=='"')||(cleaned.front()=='\''&&cleaned.back()=='\''))) {
+      cleaned = cleaned.substr(1, cleaned.size()-2);
+  }
+  cleaned = trim(cleaned);
+
+  // Defaults.
+  *out_device = "";
+  *out_index  = 0;
+  *out_width  = 640;
+  *out_height = 480;
+  *out_fps    = 30;
+
+  // Split on first comma – everything after is format.
+  size_t comma = cleaned.find(',');
+  std::string device_part = cleaned.substr(0, comma);
+  std::string fmt_part    = (comma != std::string::npos) ? cleaned.substr(comma + 1) : "";
+
+  // Try numeric device index first.
+  bool numeric = !device_part.empty() && std::all_of(device_part.begin(), device_part.end(), ::isdigit);
+  if (numeric) {
+    *out_index = static_cast<size_t>(std::stoul(device_part));
+  } else {
+    *out_device = device_part;
+  }
+
+  if (!fmt_part.empty()) {
+    // Expected "<width>x<height>@<fps>" – each optional.
+    int w = *out_width, h = *out_height, fps = *out_fps;
+    size_t x_pos = fmt_part.find('x');
+    size_t at_pos = fmt_part.find('@');
+    if (x_pos != std::string::npos) {
+      w = std::stoi(fmt_part.substr(0, x_pos));
+      if (at_pos != std::string::npos) {
+        h = std::stoi(fmt_part.substr(x_pos + 1, at_pos - x_pos - 1));
+        fps = std::stoi(fmt_part.substr(at_pos + 1));
+      } else {
+        h = std::stoi(fmt_part.substr(x_pos + 1));
+      }
+    }
+    *out_width  = w;
+    *out_height = h;
+    *out_fps    = fps;
+  }
+  return true;
+}
+
+class DirectPeer; // forward declaration
+
+rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>
+CreateCameraVideoSource(DirectPeer* owner, const Options& opts) {
+  using namespace webrtc;
+
+  std::string device_name;
+  size_t      device_index = 0;
+  int         width = 640, height = 480, fps = 30;
+
+  if (!ParseCameraSpec(opts.camera, &device_name, &device_index, &width, &height, &fps)) {
+    return nullptr;
+  }
+
+  // Enumerate devices if name was supplied or to validate index.
+  std::unique_ptr<VideoCaptureModule::DeviceInfo> dev_info(VideoCaptureFactory::CreateDeviceInfo());
+  if (!dev_info) {
+    RTC_LOG(LS_ERROR) << "Camera DeviceInfo unavailable";
+    return nullptr;
+  }
+
+  uint32_t num_devs = dev_info->NumberOfDevices();
+  if (num_devs == 0) {
+    RTC_LOG(LS_ERROR) << "No video capture devices found";
+    return nullptr;
+  }
+
+  // If device name requested, translate to index.
+  if (!device_name.empty()) {
+    bool found = false;
+    char name[256];
+    char unique_name[256];
+    for (uint32_t i = 0; i < num_devs; ++i) {
+      if (dev_info->GetDeviceName(i, name, sizeof(name), unique_name, sizeof(unique_name)) != 0) {
+        continue;
+      }
+      if (device_name == name || device_name == unique_name) {
+        device_index = i;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      RTC_LOG(LS_ERROR) << "Requested camera '" << device_name << "' not found";
+      return nullptr;
+    }
+  } else if (device_index >= num_devs) {
+    RTC_LOG(LS_ERROR) << "Camera index " << device_index << " out of range (" << num_devs << ")";
+    return nullptr;
+  }
+
+  // Build the FakeVideoTrackSource on the owner's signaling thread so its
+  // internal thread checker is satisfied.
+  rtc::scoped_refptr<FakeVideoTrackSource> track_source;
+  if (owner && owner->signaling_thread()) {
+      owner->signaling_thread()->BlockingCall([&track_source]() {
+          track_source = FakeVideoTrackSource::Create(false);
+          track_source->SetState(webrtc::MediaSourceInterface::kLive);
+      });
+  } else {
+      track_source = FakeVideoTrackSource::Create(false);
+      track_source->SetState(webrtc::MediaSourceInterface::kLive);
+  }
+
+  // Create capturer.
+  std::unique_ptr<webrtc::test::VcmCapturer> capturer(
+      webrtc::test::VcmCapturer::Create(static_cast<size_t>(width), static_cast<size_t>(height), static_cast<size_t>(fps), device_index));
+
+  if (!capturer) {
+    RTC_LOG(LS_ERROR) << "Failed to create VcmCapturer for camera index " << device_index;
+    return nullptr;
+  }
+
+  // Create sink to forward frames.
+  std::unique_ptr<CameraFrameSink> sink = std::make_unique<CameraFrameSink>(track_source);
+  capturer->AddOrUpdateSink(sink.get(), rtc::VideoSinkWants());
+
+  if (owner) {
+    owner->capturers().push_back(std::move(capturer));
+    owner->sinks().push_back(std::move(sink));
+  }
+
+  RTC_LOG(LS_INFO) << "Camera video source created: " << width << "x" << height << "@" << fps << "fps";
+
+  return track_source;
+}
+
 #include "video.h"
 #include "status.h"
 
@@ -115,27 +291,23 @@ void DirectPeer::Start() {
     
         // Create a video track source for the caller.
         if (opts_.video) {
-            // Check if a video source is already set and live
+            // Reuse existing live source if present.
             rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> existing_source = video_source_;
             if (existing_source && existing_source->state() == webrtc::MediaSourceInterface::kLive) {
-                RTC_LOG(LS_INFO) << "Existing video source is already set and live for caller. Not overwriting with StaticPeriodicVideoTrackSource.";
+                RTC_LOG(LS_INFO) << "Existing video source is already live – keeping it.";
             } else {
-                RTC_LOG(LS_INFO) << "Creating StaticPeriodicVideoTrackSource for " << (is_caller() ? "caller" : "callee");
-                video_source_ = new rtc::RefCountedObject<webrtc::StaticPeriodicVideoTrackSource>(false);
-                RTC_LOG(LS_INFO) << "StaticPeriodicVideoTrackSource created, state: " << (video_source_->state() == webrtc::MediaSourceInterface::kLive ? "Live" : "Not Live");
-                // Check if the source is producing frames
-                webrtc::StaticPeriodicVideoTrackSource* static_source = static_cast<webrtc::StaticPeriodicVideoTrackSource*>(video_source_.get());
-                RTC_LOG(LS_INFO) << "StaticPeriodicVideoTrackSource frame generation status: " << (static_source->is_running() ? "Running" : "Not Running");
-                // Attempt to start the source if not running
-                if (!static_source->is_running()) {
-                    RTC_LOG(LS_INFO) << "Attempting to start StaticPeriodicVideoTrackSource...";
-                    // Note: Assuming there might be a start method or similar; adjust based on actual API
-                    // static_source->static_periodic_source().Start(); // Uncomment if a start method exists
-                    RTC_LOG(LS_WARNING) << "No direct method to start StaticPeriodicVideoTrackSource. It may need initialization with video content or a specific start call.";
+                // Prefer real camera capture when opts_.camera is provided.
+                if (!opts_.camera.empty()) {
+                    video_source_ = CreateCameraVideoSource(this, opts_);
+                }
+                // Fallback to synthetic if camera unavailable or unspecified.
+                if (!video_source_) {
+                    RTC_LOG(LS_INFO) << "Falling back to StaticPeriodicVideoTrackSource";
+                    video_source_ = new rtc::RefCountedObject<webrtc::StaticPeriodicVideoTrackSource>(false);
                 }
                 SetVideoSource(video_source_);
             }
-            RTC_LOG(LS_INFO) << "Video source set for caller using SetVideoSource.";
+            RTC_LOG(LS_INFO) << "Video source configured for caller.";
         }
 
         webrtc::PeerConnectionInterface::RTCOfferAnswerOptions offer_options;
@@ -417,21 +589,18 @@ void DirectPeer::SetRemoteDescription(const std::string& sdp) {
 
                     // Create a video track source for the callee if video is enabled.
                     if (opts_.video) {
-                        RTC_LOG(LS_INFO) << "Creating StaticPeriodicVideoTrackSource for " << (is_caller() ? "caller" : "callee");
-                        video_source_ = new rtc::RefCountedObject<webrtc::StaticPeriodicVideoTrackSource>(false);
-                        RTC_LOG(LS_INFO) << "StaticPeriodicVideoTrackSource created, state: " << (video_source_->state() == webrtc::MediaSourceInterface::kLive ? "Live" : "Not Live");
-                        // Check if the source is producing frames
-                        webrtc::StaticPeriodicVideoTrackSource* static_source = static_cast<webrtc::StaticPeriodicVideoTrackSource*>(video_source_.get());
-                        RTC_LOG(LS_INFO) << "StaticPeriodicVideoTrackSource frame generation status: " << (static_source->is_running() ? "Running" : "Not Running");
-                        // Attempt to start the source if not running
-                        if (!static_source->is_running()) {
-                            RTC_LOG(LS_INFO) << "Attempting to start StaticPeriodicVideoTrackSource...";
-                            // Note: Assuming there might be a start method or similar; adjust based on actual API
-                            // static_source->static_periodic_source().Start(); // Uncomment if a start method exists
-                            RTC_LOG(LS_WARNING) << "No direct method to start StaticPeriodicVideoTrackSource. It may need initialization with video content or a specific start call.";
+                        // Prefer camera when specified.
+                        if (!opts_.camera.empty()) {
+                            video_source_ = CreateCameraVideoSource(this, opts_);
+                        }
+                        if (!video_source_) {
+                            RTC_LOG(LS_INFO) << "Callee falling back to StaticPeriodicVideoTrackSource";
+                            signaling_thread()->BlockingCall([this]() {
+                                video_source_ = new rtc::RefCountedObject<webrtc::StaticPeriodicVideoTrackSource>(false);
+                            });
                         }
                         SetVideoSource(video_source_);
-                        RTC_LOG(LS_INFO) << "Video source set for callee using SetVideoSource.";
+                        RTC_LOG(LS_INFO) << "Video source configured for callee.";
                     }
 
                     create_session_observer_ = rtc::make_ref_counted<LambdaCreateSessionDescriptionObserver>(
