@@ -606,7 +606,11 @@ void DirectCalleeClient::setupWebRTCListener() {
             }
             if (!video_source_) {
                 APP_LOG(AS_INFO) << "Callee fallback to synthetic video source";
-                video_source_ = new rtc::RefCountedObject<webrtc::StaticPeriodicVideoTrackSource>(false);
+                signaling_thread()->BlockingCall([this]() {
+                    auto* src = new rtc::RefCountedObject<webrtc::StaticPeriodicVideoTrackSource>(false);
+                    src->SetState(webrtc::MediaSourceInterface::kLive);
+                    video_source_ = src;
+                });
             }
             SetVideoSource(video_source_);
         }

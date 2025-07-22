@@ -303,7 +303,12 @@ void DirectPeer::Start() {
                 // Fallback to synthetic if camera unavailable or unspecified.
                 if (!video_source_) {
                     RTC_LOG(LS_INFO) << "Falling back to StaticPeriodicVideoTrackSource";
-                    video_source_ = new rtc::RefCountedObject<webrtc::StaticPeriodicVideoTrackSource>(false);
+                    signaling_thread()->BlockingCall([this]() {
+                        auto* src = new rtc::RefCountedObject<
+                            webrtc::StaticPeriodicVideoTrackSource>(false);
+                        src->SetState(webrtc::MediaSourceInterface::kLive);
+                        video_source_ = src;               // assign while on signaling thread
+                    });
                 }
                 SetVideoSource(video_source_);
             }
@@ -596,7 +601,10 @@ void DirectPeer::SetRemoteDescription(const std::string& sdp) {
                         if (!video_source_) {
                             RTC_LOG(LS_INFO) << "Callee falling back to StaticPeriodicVideoTrackSource";
                             signaling_thread()->BlockingCall([this]() {
-                                video_source_ = new rtc::RefCountedObject<webrtc::StaticPeriodicVideoTrackSource>(false);
+                                auto* src = new rtc::RefCountedObject<
+                                    webrtc::StaticPeriodicVideoTrackSource>(false);
+                                src->SetState(webrtc::MediaSourceInterface::kLive);
+                                video_source_ = src;               // assign while on signaling thread
                             });
                         }
                         SetVideoSource(video_source_);
