@@ -65,13 +65,17 @@ class StaticPeriodicVideoSource final
           // Only send frames if a YUV buffer is loaded - don't send black/fake frames
           {
             MutexLock lock(&mutex_);
+            rtc::scoped_refptr<VideoFrameBuffer> buffer_to_send;
             if (use_yuv_ && yuv_buffer_) {
-              rtc::scoped_refptr<VideoFrameBuffer> buffer_to_send = yuv_buffer_;
-              int64_t timestamp = rtc::TimeMicros();
-              VideoFrame frame(buffer_to_send, rotation_, timestamp);
-              broadcaster_.OnFrame(frame);
-              return frame_interval;
+              buffer_to_send = yuv_buffer_;
+            } else {
+              buffer_to_send = I420Buffer::Create(current_width_, current_height_);
             }
+
+            int64_t timestamp = rtc::TimeMicros();
+            VideoFrame frame(buffer_to_send, rotation_, timestamp);
+            broadcaster_.OnFrame(frame);
+            return frame_interval;
           }
           // No YUV buffer loaded - skip sending frame to avoid black frames
           // This ensures only real video content is transmitted
@@ -184,6 +188,35 @@ class StaticPeriodicVideoTrackSource : public VideoTrackSource {
 
  private:
   StaticPeriodicVideoSource source_;
+};
+
+class EchoVideoTrackSource : public webrtc::VideoTrackSource,
+                            public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+ public:
+  EchoVideoTrackSource()
+      : webrtc::VideoTrackSource(/*remote=*/false) {
+     SetState(webrtc::MediaSourceInterface::kLive);
+   }
+
+  // rtc::VideoSinkInterface implementation – called with frames from the
+  // *remote* video track we attach to.
+  void OnFrame(const webrtc::VideoFrame& frame) override {
+    broadcaster_.OnFrame(frame);
+  }
+  void OnDiscardedFrame() override {}
+
+  // Expose wants aggregation from broadcaster
+  rtc::VideoSinkWants wants() const { return broadcaster_.wants(); }
+
+ protected:
+  // webrtc::VideoTrackSource implementation – this is what the WebRTC encoder
+  // pulls frames from.
+  rtc::VideoSourceInterface<webrtc::VideoFrame>* source() override {
+    return &broadcaster_;
+  }
+
+ private:
+  rtc::VideoBroadcaster broadcaster_;
 };
 
 // Simple video sink that logs frame information to the console
