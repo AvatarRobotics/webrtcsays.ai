@@ -19,6 +19,12 @@
 #include <net/if.h>
 #include <regex>
 #include "status.h"
+#include "video.h"
+#include "pc/video_track_source.h"
+
+// Forward declaration from peer.cc so we can create a camera source here.
+rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>
+CreateCameraVideoSource(class DirectPeer*, const Options&);
 
 // DirectCallerClient Implementation
 
@@ -590,6 +596,24 @@ void DirectCalleeClient::setupWebRTCListener() {
     if (!DirectCallee::StartListening()) {
         APP_LOG(AS_ERROR) << "Failed to start WebRTC listener on port " << local_port_;
         return;
+    }
+
+    // Ensure a local video source is ready so the SDP answer advertises sendrecv.
+    if (opts_.video) {
+        if (!video_source_) {
+            if (!opts_.camera.empty()) {
+                video_source_ = CreateCameraVideoSource(this, opts_);
+            }
+            if (!video_source_) {
+                APP_LOG(AS_INFO) << "Callee fallback to synthetic video source";
+                signaling_thread()->BlockingCall([this]() {
+                    auto* src = new rtc::RefCountedObject<webrtc::StaticPeriodicVideoTrackSource>(false);
+                    src->SetState(webrtc::MediaSourceInterface::kLive);
+                    video_source_ = src;
+                });
+            }
+            SetVideoSource(video_source_);
+        }
     }
 
     // Resume WebSocket listener now that we are ready to accept new calls.
