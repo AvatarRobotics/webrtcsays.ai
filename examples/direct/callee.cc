@@ -382,9 +382,8 @@ void DirectCallee::OnClose(rtc::AsyncPacketSocket* socket) {
 }
 
 bool DirectCallee::SendMessage(const std::string& message) {
-  RTC_LOG(LS_INFO) << "Callee received: " << message;
-  APP_LOG(AS_INFO) << "WebSocket SEND: " << message;
-  // Implementation of SendMessage method
+  RTC_LOG(LS_INFO) << "Callee SEND: " << message;
+
   return DirectPeer::SendMessage(message);
 }
 

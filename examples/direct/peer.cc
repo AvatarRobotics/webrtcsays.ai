@@ -559,31 +559,44 @@ void DirectPeer::SetRemoteDescription(const std::string& sdp) {
                     // from the remote offer.
                     for (const auto& t : peer_connection()->GetTransceivers()) {
                         if (t->media_type() == cricket::MEDIA_TYPE_AUDIO) {
-                            // Make sure we will both send and receive.
-                            auto dir_res = t->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendRecv);
-                            RTC_LOG(LS_INFO) << "Setting existing audio transceiver direction → "
-                                             << (dir_res.ok() ? "success" : dir_res.message());
-
+                            // Attach our local track FIRST, then switch direction to sendrecv.
                             auto sender = t->sender();
                             if (sender && sender->SetTrack(audio_track_.get())) {
                                 RTC_LOG(LS_INFO) << "Attached local audio track to existing transceiver.";
+
+                                // Now request bidirectional media
+                                auto dir_res = t->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendRecv);
+                                RTC_LOG(LS_INFO) << "Setting existing audio transceiver direction → "
+                                                 << (dir_res.ok() ? "success" : dir_res.message());
+
                                 track_added = true;
                             } else {
-                                RTC_LOG(LS_WARNING) << "Failed to attach track to existing transceiver.";
+                                RTC_LOG(LS_WARNING) << "Failed to attach track to existing transceiver (sender unavailable or SetTrack failed).";
                             }
-                            break; // Only need the first AUDIO transceiver
-                        }
+ 
+                             // Re-read direction **after** SetTrack
+                             webrtc::RtpTransceiverDirection new_dir = t->direction();
+                             RTC_LOG(LS_INFO) << "Transceiver direction NOW is "
+                                              << (new_dir == webrtc::RtpTransceiverDirection::kSendRecv
+                                                      ? "send/rcv"
+                                                      : new_dir == webrtc::RtpTransceiverDirection::kRecvOnly
+                                                            ? "recv-only"
+                                                            : "other");
+                             break; // Only need the first AUDIO transceiver
+                         }
                     }
 
                     // If there was no suitable transceiver (unlikely) fall back to AddTrack which
                     // will re-use or create an appropriate transceiver without adding an extra m-line.
                     if (!track_added) {
-                        auto sender_or = peer_connection()->AddTrack(audio_track_, {"stream0"});
-                        if (sender_or.ok()) {
-                            RTC_LOG(LS_INFO) << "Audio track added via AddTrack fallback.";
+                        webrtc::RtpTransceiverInit init;
+                        init.direction = webrtc::RtpTransceiverDirection::kSendRecv;
+                        auto tr_or = peer_connection()->AddTransceiver(audio_track_, init);
+                        if (tr_or.ok()) {
+                            RTC_LOG(LS_INFO) << "Created new audio transceiver with sendrecv.";
                             track_added = true;
                         } else {
-                            RTC_LOG(LS_ERROR) << "Failed to add audio track: " << sender_or.error().message();
+                            RTC_LOG(LS_ERROR) << "AddTransceiver failed: " << tr_or.error().message();
                         }
                     }
 

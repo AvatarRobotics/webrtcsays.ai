@@ -30,160 +30,35 @@
 #include "rtc_base/time_utils.h"
 
 namespace webrtc {
-class StaticPeriodicVideoSource final
-    : public rtc::VideoSourceInterface<VideoFrame> {
+// StaticPeriodic video source no longer used; class definitions removed to reduce footprint.
+
+class EchoVideoTrackSource : public webrtc::VideoTrackSource,
+                            public rtc::VideoSinkInterface<webrtc::VideoFrame> {
  public:
-  static constexpr int kDefaultFrameIntervalMs = 1000;
-  static constexpr int kDefaultWidth = 640;
-  static constexpr int kDefaultHeight = 480;
+  EchoVideoTrackSource()
+      : webrtc::VideoTrackSource(/*remote=*/false) {
+     SetState(webrtc::MediaSourceInterface::kLive);
+   }
 
-  struct Config {
-    int width = kDefaultWidth;
-    int height = kDefaultHeight;
-    int frame_interval_ms = kDefaultFrameIntervalMs;
-    VideoRotation rotation = kVideoRotation_0;
-    int64_t timestamp_offset_ms = 0;
-  };
-
-  StaticPeriodicVideoSource() : StaticPeriodicVideoSource(Config()) {}
-  explicit StaticPeriodicVideoSource(Config config)
-      : frame_source_(
-            config.width,
-            config.height,
-            config.frame_interval_ms * rtc::kNumMicrosecsPerMillisec,
-            config.timestamp_offset_ms * rtc::kNumMicrosecsPerMillisec),
-        task_queue_(std::make_unique<TaskQueueForTest>(
-            "FakePeriodicVideoTrackSource")),
-        rotation_(config.rotation),
-        current_width_(config.width),
-        current_height_(config.height) {
-    frame_source_.SetRotation(config.rotation);
-
-    TimeDelta frame_interval = TimeDelta::Millis(config.frame_interval_ms);
-    repeating_task_handle_ =
-        RepeatingTaskHandle::Start(task_queue_->Get(), [this, frame_interval] {
-          // Only send frames if a YUV buffer is loaded - don't send black/fake frames
-          {
-            MutexLock lock(&mutex_);
-            if (use_yuv_ && yuv_buffer_) {
-              rtc::scoped_refptr<VideoFrameBuffer> buffer_to_send = yuv_buffer_;
-              int64_t timestamp = rtc::TimeMicros();
-              VideoFrame frame(buffer_to_send, rotation_, timestamp);
-              broadcaster_.OnFrame(frame);
-              return frame_interval;
-            }
-          }
-          // No YUV buffer loaded - skip sending frame to avoid black frames
-          // This ensures only real video content is transmitted
-          return frame_interval;
-        });
+  // rtc::VideoSinkInterface implementation – called with frames from the
+  // *remote* video track we attach to.
+  void OnFrame(const webrtc::VideoFrame& frame) override {
+    broadcaster_.OnFrame(frame);
   }
+  void OnDiscardedFrame() override {}
 
-  rtc::VideoSinkWants wants() const {
-    MutexLock lock(&mutex_);
-    return wants_;
-  }
-
-  void RemoveSink(rtc::VideoSinkInterface<VideoFrame>* sink) override {
-    RTC_DCHECK(thread_checker_.IsCurrent());
-    broadcaster_.RemoveSink(sink);
-  }
-
-  void AddOrUpdateSink(rtc::VideoSinkInterface<VideoFrame>* sink,
-                       const rtc::VideoSinkWants& wants) override {
-    RTC_DCHECK(thread_checker_.IsCurrent());
-    {
-      MutexLock lock(&mutex_);
-      wants_ = wants;
-    }
-    broadcaster_.AddOrUpdateSink(sink, wants);
-  }
-
-  void Stop() {
-    RTC_DCHECK(task_queue_);
-    task_queue_->SendTask([&]() { repeating_task_handle_.Stop(); });
-    task_queue_.reset();
-  }
-
-  // Allow loading custom YUV data to be broadcast periodically.
-  void LoadYuvData(const YUVData& data) {
-    // Create an I420 buffer and copy YUV planes
-    auto buffer = I420Buffer::Create(data.width, data.height);
-    // Copy Y plane
-    for (int i = 0; i < data.height; ++i) {
-      memcpy(buffer->MutableDataY() + i * buffer->StrideY(),
-             data.y.get() + i * data.width,
-             data.width);
-    }
-    // Copy U and V planes (half resolution)
-    int half_width = data.width / 2;
-    int half_height = data.height / 2;
-    for (int i = 0; i < half_height; ++i) {
-      memcpy(buffer->MutableDataU() + i * buffer->StrideU(),
-             data.u.get() + i * half_width,
-             half_width);
-      memcpy(buffer->MutableDataV() + i * buffer->StrideV(),
-             data.v.get() + i * half_width,
-             half_width);
-    }
-    // Store under lock and update dimensions
-    {
-      MutexLock lock(&mutex_);
-      yuv_buffer_ = buffer;
-      use_yuv_ = true;
-      current_width_ = data.width;
-      current_height_ = data.height;
-    }
-  }
-
-  bool is_running() const {
-    return repeating_task_handle_.Running();
-  }
-
- private:
-  SequenceChecker thread_checker_{SequenceChecker::kDetached};
-
-  rtc::VideoBroadcaster broadcaster_;
-  cricket::FakeFrameSource frame_source_;
-  mutable Mutex mutex_;
-  rtc::VideoSinkWants wants_ RTC_GUARDED_BY(&mutex_);
-
-  std::unique_ptr<TaskQueueForTest> task_queue_;
-  RepeatingTaskHandle repeating_task_handle_;
-
-  // Custom YUV buffer and flag
-  rtc::scoped_refptr<I420BufferInterface> yuv_buffer_ RTC_GUARDED_BY(&mutex_);
-  bool use_yuv_ RTC_GUARDED_BY(&mutex_) = false;
-  VideoRotation rotation_;
-  // Dynamic dimensions for frames
-  int current_width_ RTC_GUARDED_BY(&mutex_);
-  int current_height_ RTC_GUARDED_BY(&mutex_);
-};
-
-class StaticPeriodicVideoTrackSource : public VideoTrackSource {
- public:
-  explicit StaticPeriodicVideoTrackSource(bool remote)
-      : StaticPeriodicVideoTrackSource(StaticPeriodicVideoSource::Config(),
-                                     remote) {}
-
-  StaticPeriodicVideoTrackSource(StaticPeriodicVideoSource::Config config,
-                               bool remote)
-      : VideoTrackSource(remote), source_(config) {}
-
-  ~StaticPeriodicVideoTrackSource() = default;
-
-  StaticPeriodicVideoSource& static_periodic_source() { return source_; }
-  const StaticPeriodicVideoSource& static_periodic_source() const {
-    return source_;
-  }
-
-  bool is_running() const { return state() == webrtc::MediaSourceInterface::kLive; }
+  // Expose wants aggregation from broadcaster
+  rtc::VideoSinkWants wants() const { return broadcaster_.wants(); }
 
  protected:
-  rtc::VideoSourceInterface<VideoFrame>* source() override { return &source_; }
+  // webrtc::VideoTrackSource implementation – this is what the WebRTC encoder
+  // pulls frames from.
+  rtc::VideoSourceInterface<webrtc::VideoFrame>* source() override {
+    return &broadcaster_;
+  }
 
  private:
-  StaticPeriodicVideoSource source_;
+  rtc::VideoBroadcaster broadcaster_;
 };
 
 // Simple video sink that logs frame information to the console
