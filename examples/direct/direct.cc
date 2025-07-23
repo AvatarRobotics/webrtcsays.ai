@@ -1041,8 +1041,14 @@ void DirectApplication::OnAddTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterfa
                 // Set as our local video source and add outgoing track
                 SetVideoSource(echo_source);
             } else {
-                // Already have a local video source – assume it's echo_source, attach new sink if needed
-                video_track->AddOrUpdateSink(static_cast<webrtc::EchoVideoTrackSource*>(video_source_.get()), rtc::VideoSinkWants());
+                // To avoid casts and RTTI, always create a dedicated EchoVideoTrackSource
+                // for echoing the remote video back, without touching the existing
+                // local video_source_ (which may be camera etc.).
+                auto echo_source = rtc::make_ref_counted<webrtc::EchoVideoTrackSource>();
+                video_track->AddOrUpdateSink(echo_source.get(), rtc::VideoSinkWants());
+                // Optionally store echo_source if you want to keep it alive explicitly,
+                // but since AddOrUpdateSink doesn't retain it, we need to hold the ref.
+                echo_sources_.push_back(echo_source);  // Add vector<scoped_refptr<EchoVideoTrackSource>> echo_sources_ to class
             }
             RTC_LOG(LS_INFO) << "Receiver: Video track state: " << video_track->state();
             RTC_LOG(LS_INFO) << "Receiver: Video track enabled: " << (video_track->enabled() ? "true" : "false");

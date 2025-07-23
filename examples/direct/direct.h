@@ -90,6 +90,7 @@
 #include "test/vcm_capturer.h"
 
 #include <modules/third_party/whillats/src/whillats.h>
+#include "video.h"
 
 namespace webrtc {
 namespace test {
@@ -288,6 +289,8 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
   std::unique_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> video_sink_;
   rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> video_source_ = nullptr;
   
+  std::vector<rtc::scoped_refptr<webrtc::EchoVideoTrackSource>> echo_sources_ = {};
+
   // Capability hint received from peer via INIT JSON ("text-only", "audio", ...)
   std::string remote_agent_ = "audio"; // default behaviour: send pre-synthesised audio unless peer says otherwise
   std::string local_agent_ = "audio";  // what we announce in our INIT
