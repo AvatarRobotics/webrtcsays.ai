@@ -89,8 +89,11 @@
 #include <system_wrappers/include/field_trial.h>
 #include "test/vcm_capturer.h"
 
-#include <modules/third_party/whillats/src/whillats.h>
 #include "video.h"
+
+#if defined(WEBRTC_SPEECH_DEVICES) 
+#include <modules/third_party/whillats/src/whillats.h>
+#endif
 
 namespace webrtc {
 namespace test {
@@ -368,10 +371,10 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
   std::vector<rtc::Socket*> tracked_sockets_;
 
   // Set video capturer from Objective-C
-#ifdef LLAMA_NOTIFICATION_ENABLED
+#if defined(WEBRTC_SPEECH_DEVICES) && defined(LLAMA_NOTIFICATION_ENABLED)
   static WhillatsLlama* llama_;
   WhillatsSetResponseCallback llamaCallback_;
-#endif
+#endif //WEBRTC_SPEECH_DEVICES && LLAMA_NOTIFICATION_ENABLED
 
 #if defined(WEBRTC_IOS) && defined(__OBJC__)
  public:

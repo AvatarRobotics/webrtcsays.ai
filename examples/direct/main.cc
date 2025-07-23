@@ -83,7 +83,7 @@ int main(int argc, char* argv[]) {
   //DirectSetLoggingLevel(AS_INFO);
   DirectApplication::rtcInitialize();
 
-  #if 1
+  #if 0
   CloudflareClient::Options cf_opts;
   cf_opts.app_id    = "252ca93c-97a1-42e6-9dc2-d1b9789ce7b6";
   cf_opts.app_token = "2e01064f42bce3157fa3";
