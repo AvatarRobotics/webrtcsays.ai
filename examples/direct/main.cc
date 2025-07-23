@@ -23,7 +23,7 @@
 #include "direct.h"
 #include "option.h"
 #include "client.h"
-//#include "room.h"
+#include "cloudflare.h"
 
 static volatile bool g_shutdown = false;
 static volatile int g_shutdown_count = 0;
@@ -82,6 +82,38 @@ int main(int argc, char* argv[]) {
 
   //DirectSetLoggingLevel(AS_INFO);
   DirectApplication::rtcInitialize();
+
+  #if 1
+  CloudflareClient::Options cf_opts;
+  cf_opts.app_id    = "252ca93c-97a1-42e6-9dc2-d1b9789ce7b6";
+  cf_opts.app_token = "2e01064f42bce3157fa3";
+  cf_opts.user_name = "cpp-peer";   // anything for log readability
+  cf_opts.echo_mode = true;         // leave true to reproduce the browser demo’s echo
+
+  auto cf = std::make_shared<CloudflareClient>(cf_opts);
+
+  // Optional: receive state callbacks
+  cf->SetReadyCallback([]() {
+      std::cout << "[CF] ICE/DTLS connected, media should be flowing\n";
+  });
+  cf->SetErrorCallback([](const std::string& err) {
+      std::cerr << "[CF] error: " << err << '\n';
+  });
+
+  if (!cf->Initialize()) {
+      std::cerr << "Init failed\n";
+      return 1;
+  }
+  if (!cf->Start()) {
+      std::cerr << "Start failed\n";
+      return 1;
+  }
+
+  // Keep the process alive while the peer connection is up
+  while (!cf->HasFailed()) {
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+  }
+#endif
 
   // Parse server address and room from options
   std::string room_name = opts.room_name.empty() ? "room101" : opts.room_name;  // Use provided room or default

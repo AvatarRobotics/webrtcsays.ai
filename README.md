@@ -13,7 +13,7 @@ export PATH=~/depot_tools:$PATH
  solutions = [
   {
     "name": "src",
-    "url": "https://github.com/wilddolphin2022/webrtcsays.ai",
+    "url": "https://github.com/AvatarRobotics/webrtcsays.ai",
     "deps_file": "DEPS",
     "managed": False,
     "custom_deps": {},
@@ -22,7 +22,7 @@ export PATH=~/depot_tools:$PATH
 target_os = ["ios", "mac", "linux"]
 # eof .gclient
 
-gclient config https://github.com/wilddolphin2022/webrtcsays.ai.git
+gclient config https://github.com/AvatarRobotics/webrtcsays.ai.git
 gclient sync
 
 # Navigate to the source directory. Original directory can be cleaned up leave "src"

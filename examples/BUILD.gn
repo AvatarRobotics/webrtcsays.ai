@@ -950,6 +950,8 @@ if (!build_with_chromium) {
         "direct/wsock.cc",
         "direct/wsock.h",
         "direct/client.h",
+        "direct/cloudflare.h",
+        "direct/cloudflare.cc"
       ]
 
       # Use the output of the action_foreach target for public headers
@@ -1140,6 +1142,7 @@ if (!build_with_chromium) {
         "//third_party/jsoncpp:jsoncpp",
       ]
 
+      libs = [ "curl" ]
       if (rtc_use_speech_audio_devices) {
         if (is_mac) {
           frameworks = [ "CoreAudio.framework" ]
@@ -1149,11 +1152,11 @@ if (!build_with_chromium) {
             whillats_subdir = "Release"
           }
           lib_dirs = [ "../modules/third_party/whillats/build/lib/" + whillats_subdir ]
-          libs = [ "whillats" ]
+          libs += [ "whillats" ]
         } else if (is_linux) {
           # Add necessary libs for whillats on Linux if applicable
           # lib_dirs = [ ... ]
-          # libs = [ ... ]
+          # libs += [ ... ]
         }
       }
 
