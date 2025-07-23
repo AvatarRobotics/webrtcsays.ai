@@ -302,12 +302,10 @@ void DirectPeer::Start() {
                 }
                 // Fallback to synthetic if camera unavailable or unspecified.
                 if (!video_source_) {
-                    RTC_LOG(LS_INFO) << "Falling back to StaticPeriodicVideoTrackSource";
+                    RTC_LOG(LS_INFO) << "Falling back to EchoVideoTrackSource";
                     signaling_thread()->BlockingCall([this]() {
-                        auto* src = new rtc::RefCountedObject<
-                            webrtc::StaticPeriodicVideoTrackSource>(false);
-                        src->SetState(webrtc::MediaSourceInterface::kLive);
-                        video_source_ = src;               // assign while on signaling thread
+                        auto src = rtc::make_ref_counted<webrtc::EchoVideoTrackSource>();
+                        video_source_ = src;
                     });
                 }
                 SetVideoSource(video_source_);
@@ -612,12 +610,10 @@ void DirectPeer::SetRemoteDescription(const std::string& sdp) {
                             video_source_ = CreateCameraVideoSource(this, opts_);
                         }
                         if (!video_source_) {
-                            RTC_LOG(LS_INFO) << "Callee falling back to StaticPeriodicVideoTrackSource";
+                            RTC_LOG(LS_INFO) << "Callee falling back to EchoVideoTrackSource";
                             signaling_thread()->BlockingCall([this]() {
-                                auto* src = new rtc::RefCountedObject<
-                                    webrtc::StaticPeriodicVideoTrackSource>(false);
-                                src->SetState(webrtc::MediaSourceInterface::kLive);
-                                video_source_ = src;               // assign while on signaling thread
+                                auto src = rtc::make_ref_counted<webrtc::EchoVideoTrackSource>();
+                                video_source_ = src;
                             });
                         }
                         SetVideoSource(video_source_);
