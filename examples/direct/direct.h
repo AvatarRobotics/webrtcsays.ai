@@ -177,10 +177,12 @@ class DIRECT_API DirectApplication : public webrtc::PeerConnectionObserver {
 
   virtual bool SendMessage(const std::string& message);
 
-  // Utility: check whether a TCP signaling socket is currently available.
+  // Utility: check whether a peer connection is currently not closed.
   // This can be used by callbacks (e.g. the Llama notification callback) to
   // avoid attempting to send when the peer has already disconnected.
-  bool IsConnected() const { return tcp_socket_ != nullptr; }
+  bool IsConnected() const { return peer_connection_ &&
+    peer_connection_->peer_connection_state() !=
+         webrtc::PeerConnectionInterface::PeerConnectionState::kClosed; }
 
   virtual void OnClose(rtc::AsyncPacketSocket* socket) {}
 

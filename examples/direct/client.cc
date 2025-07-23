@@ -449,6 +449,12 @@ bool DirectCalleeClient::StartListening() {
 
         this->AddIceCandidate(cand_str, mline_index);
     });
+
+    // Forward raw INVITE lines (with JSON payload) so DirectPeer can extract agent info.
+    signaling_client_->setInviteReceivedCallback([this](const std::string& raw_message) {
+        // Pass through to DirectPeer message handler; no socket context in WSS path.
+        this->HandleMessage(nullptr, raw_message, rtc::SocketAddress());
+    });
     
     // Try to connect to signaling server to register our presence
     // But don't fail if signaling server is unavailable
@@ -576,6 +582,19 @@ void DirectCalleeClient::SignalQuit() {
     }).detach();
 }
 
+// -------------------------------------------------------------------
+//  Override SendMessage so generic strings (LLAMA:, WHISPER:, etc.) are
+//  forwarded through the WebSocket signalling path when available.
+// -------------------------------------------------------------------
+bool DirectCalleeClient::SendMessage(const std::string& message) {
+    // Use signaling server if connected; fall back to base implementation.
+    if (signaling_client_ && signaling_client_->isConnected()) {
+        signaling_client_->ws_client()->send_message(message);
+        return true;
+    }
+    return DirectCallee::SendMessage(message);
+}
+
 void DirectCalleeClient::setupWebRTCListener() {
     APP_LOG(AS_INFO) << "DirectCalleeClient: Setting up WebRTC listener on port " << local_port_;
     
@@ -674,13 +693,18 @@ void DirectCalleeClient::onIncomingCall(const std::string& peer_id, const std::s
         return;
     }
 
-    // If we are already in a call, politely reject the new one.
+    // If a PeerConnection already exists, determine whether it is actually in use.
+    // Accept the OFFER as long as we have not yet set a remote description (i.e. first
+    // call leg) – this happens because StartListening() pre-creates the PC.
     if (peer_connection()) {
-        APP_LOG(AS_WARNING) << "DirectCalleeClient: Already in a call, rejecting new call from " << peer_id;
-        if (signaling_client_) {
-            signaling_client_->sendCancel(); // Inform caller we are busy
+        bool already_in_call = peer_connection()->remote_description() != nullptr;
+        if (already_in_call) {
+            APP_LOG(AS_WARNING) << "DirectCalleeClient: Already in an active call, rejecting new call from " << peer_id;
+            if (signaling_client_) {
+                signaling_client_->sendCancel();
+            }
+            return;
         }
-        return;
     }
 
     // Ensure WebRTC layer is initialized and listening.
@@ -911,6 +935,7 @@ void DirectCalleeClient::OnConnectionChange(webrtc::PeerConnectionInterface::Pee
 
 DirectClient::DirectClient(const std::string& user_id)
     : user_id_(user_id), connected_(false), registered_(false) {
+    invite_received_callback_ = nullptr;
     // Create a dedicated network thread for WebSocket operations first
     network_thread_ = rtc::Thread::CreateWithSocketServer();
     network_thread_->SetName("WebSocketNetworkThread", nullptr);
@@ -1101,10 +1126,19 @@ void DirectClient::handleProtocolMessage(const std::string& message) {
         ws_client_->send_message(response);
 
     } else if (message.rfind(Msg::kInvitePrefix, 0) == 0) {
+        // Do the quick ACK so the browser proceeds
         APP_LOG(AS_INFO) << "DirectClient sending " << Msg::kWaiting;
         ws_client_->send_message(Msg::kWaiting);
 
-    } else if (message.rfind(Msg::kAddressPrefix, 0) == 0) {
+        // Forward raw INVITE line to upper layer via callback.
+        if (invite_received_callback_) {
+            invite_received_callback_(message);
+        }
+
+        return; // stop further processing for INVITE – handled above
+    }
+
+    else if (message.rfind(Msg::kAddressPrefix, 0) == 0) {
         // Format: ADDRESS:user_id:ip:port
         std::vector<std::string> parts;
         std::stringstream ss(message);

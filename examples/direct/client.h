@@ -40,6 +40,9 @@ using IceCandidateReceivedCallback = std::function<void(const std::string& peer_
 using HelloReceivedCallback = std::function<void(const std::string& peer_id)>;
 using UserListReceivedCallback = std::function<void(const std::vector<std::string>& user_ids)>;
 
+// Callback for raw INVITE lines (including JSON payload)
+using InviteReceivedCallback = std::function<void(const std::string& message)>;
+
 // Callback for receiving a direct IP:port address for a peer
 using AddressReceivedCallback = std::function<void(const std::string& user_id,
                                                   const std::string& ip,
@@ -66,6 +69,7 @@ public:
     void setHelloReceivedCallback(HelloReceivedCallback callback) { hello_received_callback_ = callback; }
     void setAddressReceivedCallback(AddressReceivedCallback callback) { address_received_callback_ = callback; }
     void setUserListReceivedCallback(UserListReceivedCallback callback) { user_list_received_callback_ = callback; }
+    void setInviteReceivedCallback(InviteReceivedCallback callback) { invite_received_callback_ = std::move(callback); }
 
     // Indicates whether this client is currently busy (active call)
     void setIsBusyCallback(const std::function<bool()>& cb) { is_busy_callback_ = cb; }
@@ -90,6 +94,7 @@ public:
     void pause();   // Stop keep-alive & async_read
     void resume();  // Restart them
 
+    std::shared_ptr<WebSocketClient> &ws_client() { return ws_client_; }
 protected:
     std::shared_ptr<WebSocketClient> ws_client_;
     std::unique_ptr<rtc::Thread> network_thread_;
@@ -109,6 +114,7 @@ protected:
     HelloReceivedCallback hello_received_callback_;
     AddressReceivedCallback address_received_callback_;
     UserListReceivedCallback user_list_received_callback_;
+    InviteReceivedCallback invite_received_callback_;
     std::function<bool()> is_busy_callback_;
     
     std::function<void(const std::string&)> default_ws_handler_;
@@ -210,6 +216,9 @@ private:
 public:
     explicit DirectCalleeClient(const Options& opts);
     ~DirectCalleeClient();
+
+    // Forward signalling-line (LLAMA:, WHISPER:, etc.) to caller via WebSocket.
+    bool SendMessage(const std::string& message) override;
 
     bool Initialize();
     bool StartListening();
