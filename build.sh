@@ -56,7 +56,6 @@ cp .vpython3 src
 
 # Step 4: Configure gclient
 echo "Configuring gclient..."
-gclient config https://github.com/AvatarRobotics/webrtcsays.ai.git
 
 #Step 5: Create .gclient file
 #echo "Creating .gclient file in src directory..."
@@ -71,30 +70,28 @@ echo "solutions = [
 ]
 target_os = ["linux"]" > .gclient
 
+gclient config https://github.com/AvatarRobotics/webrtcsays.ai.git
+
 # Step 6: Move .gclient to src directory
 mv .gclient src
+cd src
 
 # Step 7: Sync the repository
 echo "Syncing repository with gclient..."
 gclient sync
 
 if [ -d "src" ]; then
-    echo "src di    rectory already exists"
+    echo "src directory already exists"
 else
     echo "src directory not created"
     exit 1
 fi
 
 
-# Step 5: Navigate to src directory
-cd src
-
-# Step 6: Pull latest changes from the repository
 echo "Pulling latest changes from WebRTCsays.ai repository..."
 git checkout avatar
 git pull https://github.com/AvatarRobotics/WebRTCsays.ai avatar
 
-# Step 7: Generate build files with GN
 if [ "$BUILD_TYPE" = "debug" ]; then
     echo "Generating build files for debug mode..."
     gn gen out/debug --args="is_debug=true rtc_include_opus=true rtc_enable_symbol_export=true rtc_build_examples=true rtc_use_speech_audio_devices=false"
@@ -103,7 +100,6 @@ else
     gn gen out/release --args="is_debug=false rtc_include_opus=true rtc_enable_symbol_export=true rtc_build_examples=true rtc_use_speech_audio_devices=false"
 fi
 
-# Step 8: Build the project with Ninja
 if [ "$BUILD_TYPE" = "debug" ]; then
     echo "Building in debug mode..."
     ninja -C out/debug direct_app
