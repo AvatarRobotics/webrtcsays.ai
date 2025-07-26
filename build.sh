@@ -58,8 +58,8 @@ cp .vpython3 src
 echo "Configuring gclient..."
 gclient config https://github.com/AvatarRobotics/webrtcsays.ai.git
 
-Step 3: Create .gclient file
-echo "Creating .gclient file in src directory..."
+#Step 5: Create .gclient file
+#echo "Creating .gclient file in src directory..."
 echo "solutions = [
   {
     'name': 'src',
@@ -71,9 +71,10 @@ echo "solutions = [
 ]
 target_os = ["linux"]" > .gclient
 
+# Step 6: Move .gclient to src directory
 mv .gclient src
 
-# Step 5: Sync the repository
+# Step 7: Sync the repository
 echo "Syncing repository with gclient..."
 gclient sync
 
