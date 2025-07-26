@@ -46,11 +46,19 @@ if ! command -v gclient &> /dev/null; then
     exit 1
 fi
 
-# Step 2: Configure gclient
+# Step 2: Create src directory
+echo "Creating src directory..."
+mkdir -p src
+
+# Step 3: Add .vpython3 to src directory
+echo "Creating .vpython3 file in src directory..."
+cp .vpython3 src
+
+# Step 4: Configure gclient
 echo "Configuring gclient..."
 gclient config https://github.com/AvatarRobotics/webrtcsays.ai.git
 
-# Step 3: Create .gclient file
+Step 3: Create .gclient file
 echo "Creating .gclient file in src directory..."
 echo "solutions = [
   {
@@ -61,21 +69,28 @@ echo "solutions = [
     "custom_deps": {},
   },
 ]
-target_os = ["ios", "mac", "linux"]" > .gclient
+target_os = ["linux"]" > .gclient
 
-# Step 4: Sync the repository
+mv .gclient src
+
+# Step 5: Sync the repository
 echo "Syncing repository with gclient..."
 gclient sync
 
-# Step 3: Add .vpython3 to src directory
-echo "Creating .vpython3 file in src directory..."
-cp .vpython3 src
+if [ -d "src" ]; then
+    echo "src di    rectory already exists"
+else
+    echo "src directory not created"
+    exit 1
+fi
+
 
 # Step 5: Navigate to src directory
 cd src
 
 # Step 6: Pull latest changes from the repository
 echo "Pulling latest changes from WebRTCsays.ai repository..."
+git checkout avatar
 git pull https://github.com/AvatarRobotics/WebRTCsays.ai avatar
 
 # Step 7: Generate build files with GN
