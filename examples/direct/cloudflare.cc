@@ -168,7 +168,7 @@ bool CloudflareClient::addParticipant() {
 
     Json::Value body(Json::objectValue);
     body["name"] = opts_.user_name;
-    body["picture"] = "https://i.imgur.com/test.jpg";
+    body["picture"] = "";
     body["preset_name"] = "all";
 
     Json::Value resp;
