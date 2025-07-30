@@ -182,7 +182,7 @@ else
 fi
 if [ -f "$APP_PATH" ]; then
   echo "Starting callee..."
-  ./"$APP_PATH" --config config.json
+  ./"$APP_PATH" --config src/config.json
 else
   echo "Built app not found at $APP_PATH"
 fi
