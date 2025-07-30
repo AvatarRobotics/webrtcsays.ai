@@ -1,104 +1,231 @@
 #!/bin/bash
 
-# Exit on any error
+# build-webrtcsays.sh - Build script for WebRTCsays.ai project
+
 set -e
 
-# Clean up old directories if they exist, but keep src
-echo "Cleaning up old directories..."
-if [ -f ".gclient" ]; then
-    echo "Removing existing .gclient file..."
-    rm -f .gclient
+# Function to display usage information
+usage() {
+    echo "Usage: $0 [-d|--debug] [-r|--release] [-h|--help]"
+    echo "  -d, --debug   : Build in debug mode (default)"
+    echo "  -r, --release : Build in release mode"
+    echo "  -h, --help    : Display this help message"
+    exit 1
+}
+
+# Default build type is debug
+BUILD_TYPE="debug"
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -d|--debug)
+            BUILD_TYPE="debug"
+            shift
+            ;;
+        -r|--release)
+            BUILD_TYPE="release"
+            shift
+            ;;
+        -h|--help)
+            usage
+            ;;
+        *)
+            echo "Unknown option: $1"
+            usage
+            ;;
+    esac
+done
+
+echo "Build type: $BUILD_TYPE"
+
+# Step 1: Add depot_tools to PATH
+export PATH=~/depot_tools:$PATH
+if ! command -v gclient &> /dev/null; then
+    echo "depot_tools not found in ~/depot_tools. Please install depot_tools and add it to your PATH."
+    exit 1
 fi
 
-# Ensure we're on the avatar branch
-echo "Switching to avatar branch..."
-git checkout avatar || git checkout -b avatar origin/avatar
+echo "Creating src directory..."
+mkdir -p src
 
-# Pull the latest code for avatar branch
-echo "Pulling latest code for avatar branch..."
-git pull origin avatar || { echo "Pull failed, forcing local branch to match remote..."; git fetch origin; git reset --hard origin/avatar; }
+echo "Configuring gclient..."
 
-# Verify we're on the correct branch
-echo "Current commit: $(git rev-parse HEAD)"
-echo "Current branch: $(git branch --show-current)"
-
-# Store the current commit hash for comparison
-CURRENT_COMMIT=$(git rev-parse HEAD)
-LAST_BUILD_COMMIT_FILE="last_build_commit.txt"
-
-# Create or update .gclient file in the root directory with 'name': 'src'
-cat > .gclient << EOF
-solutions = [
+echo "Creating .gclient file in src directory..."
+echo "solutions = [
   {
-    "managed": False,
-    "name": "src",
-    "url": "https://github.com/AvatarRobotics/webrtcsays.ai.git",
-    "custom_deps": {},
+    'name': 'src',
+    'url': 'https://github.com/AvatarRobotics/webrtcsays.ai.git',
     "deps_file": "DEPS",
+    "managed": False,    
+    "custom_deps": {},
   },
 ]
-EOF
+target_os = ["linux"]" > .gclient
 
-# Check if src directory exists and is initialized
-if [ -d "src" ] && [ -d "src/build" ] && [ -f "src/.git/HEAD" ]; then
-    echo "Skipping gclient sync as src directory already exists and appears initialized."
+gclient config https://github.com/AvatarRobotics/webrtcsays.ai.git
+
+# Move .gclient to src directory
+echo "Adding .vpython3 and .gclient files in src directory..."
+cp .vpython3 src
+cp .gclient src
+
+
+# Step 7: Sync the repository
+echo "Syncing repository with gclient..."
+gclient sync
+
+if [ -d "src" ]; then
+    echo "src directory already exists"
 else
-    echo "Running gclient sync to initialize src directory..."
-    gclient sync --nohooks --no-history --shallow
-    if [ ! -d "src/build" ]; then
-        echo "ERROR: src/build directory missing after gclient sync. Check your DEPS file or sync process."
-        exit 1
-    fi
+    echo "src directory not created"
+    exit 1
 fi
 
-# Copy .vpython3 to src directory
-cp .vpython3 src/ || { echo "WARNING: .vpython3 not found in root, build may fail if dependencies are incorrect."; }
-
-# Navigate to src directory
 cd src
 
-# Check if binary already exists and if code has updates
-BINARY_PATH="out/Default/webrtcsays"
-LAST_BUILD_COMMIT=""
-if [ -f "../$LAST_BUILD_COMMIT_FILE" ]; then
-    LAST_BUILD_COMMIT=$(cat ../$LAST_BUILD_COMMIT_FILE)
-fi
+echo "Pulling latest changes from WebRTCsays.ai repository..."
+git checkout avatar
+git pull https://github.com/AvatarRobotics/WebRTCsays.ai avatar
 
-# Check if binary exists and is executable
-if [ -f "$BINARY_PATH" ] && [ -x "$BINARY_PATH" ]; then
-    # Test if binary can run (e.g., by checking version or help output)
-    if "$BINARY_PATH" --help >/dev/null 2>&1; then
-        echo "Binary at $BINARY_PATH is runnable. Cleaning up directories except src..."
-        cd ..
-        for dir in */ ; do
-            if [ "$dir" != "src/" ]; then
-                echo "Removing $dir..."
-                rm -rf "$dir"
-            fi
-        done
-        cd src
-    else
-        echo "Binary at $BINARY_PATH exists but is not runnable. Skipping cleanup of other directories."
-    fi
+if [ "$BUILD_TYPE" = "debug" ]; then
+    echo "Generating build files for debug mode..."
+    gn gen out/debug --args="is_debug=true rtc_include_opus=true rtc_enable_symbol_export=true rtc_build_examples=true rtc_use_speech_audio_devices=false"
 else
-    echo "Binary at $BINARY_PATH does not exist or is not executable. Skipping cleanup of other directories."
+    echo "Generating build files for release mode..."
+    gn gen out/release --args="is_debug=false rtc_include_opus=true rtc_enable_symbol_export=true rtc_build_examples=true rtc_use_speech_audio_devices=false"
 fi
 
-if [ -f "$BINARY_PATH" ] && [ "$CURRENT_COMMIT" = "$LAST_BUILD_COMMIT" ]; then
-    echo "Binary already exists at $BINARY_PATH and no code updates detected, skipping build..."
+if [ "$BUILD_TYPE" = "debug" ]; then
+    echo "Building in debug mode..."
+    ninja -C out/debug direct_app
 else
-    echo "Building WebRTC project..."
-    # Add your build commands here, e.g.,
-    # gn gen out/Default
-    # ninja -C out/Default
-    echo "Build completed."
-    # Store the current commit hash as the last built commit
-    echo "$CURRENT_COMMIT" > ../$LAST_BUILD_COMMIT_FILE
+    echo "Building in release mode..."
+    ninja -C out/release direct_app
 fi
 
-# Run the binary in callee mode
-echo "Running binary in callee mode..."
-$BINARY_PATH --callee
+echo "Build completed successfully!"
 
-echo "Script execution completed."
+echo "To test the application, you can run:"
+if [ "$BUILD_TYPE" = "debug" ]; then
+    ./out/debug/direct_app --help
+else
+    ./out/release/direct_app --help
+fi 
 
+#!/bin/bash
+
+# build-webrtcsays.sh - Build script for WebRTCsays.ai project
+
+set -e
+
+# Function to display usage information
+usage() {
+    echo "Usage: $0 [-d|--debug] [-r|--release] [-h|--help]"
+    echo "  -d, --debug   : Build in debug mode (default)"
+    echo "  -r, --release : Build in release mode"
+    echo "  -h, --help    : Display this help message"
+    exit 1
+}
+
+# Default build type is debug
+BUILD_TYPE="debug"
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -d|--debug)
+            BUILD_TYPE="debug"
+            shift
+            ;;
+        -r|--release)
+            BUILD_TYPE="release"
+            shift
+            ;;
+        -h|--help)
+            usage
+            ;;
+        *)
+            echo "Unknown option: $1"
+            usage
+            ;;
+    esac
+done
+
+echo "Build type: $BUILD_TYPE"
+
+# Step 1: Add depot_tools to PATH
+export PATH=~/depot_tools:$PATH
+if ! command -v gclient &> /dev/null; then
+    echo "depot_tools not found in ~/depot_tools. Please install depot_tools and add it to your PATH."
+    exit 1
+fi
+
+# Step 2: Create src directory
+echo "Creating src directory..."
+mkdir -p src
+
+# Step 3: Add .vpython3 to src directory
+echo "Creating .vpython3 file in src directory..."
+cp .vpython3 src
+
+# Step 4: Configure gclient
+echo "Configuring gclient..."
+
+#Step 5: Create .gclient file
+#echo "Creating .gclient file in src directory..."
+echo "solutions = [
+  {
+    'name': 'src',
+    'url': 'https://github.com/AvatarRobotics/webrtcsays.ai.git',
+    "deps_file": "DEPS",
+    "managed": False,    
+    "custom_deps": {},
+  },
+]
+target_os = ["linux"]" > .gclient
+
+gclient config https://github.com/AvatarRobotics/webrtcsays.ai.git
+
+# Step 6: Move .gclient to src directory
+mv .gclient src
+cd src
+
+# Step 7: Sync the repository
+echo "Syncing repository with gclient..."
+gclient sync
+
+if [ -d "src" ]; then
+    echo "src directory already exists"
+else
+    echo "src directory not created"
+    exit 1
+fi
+
+
+echo "Pulling latest changes from WebRTCsays.ai repository..."
+
+if [ "$BUILD_TYPE" = "debug" ]; then
+    echo "Generating build files for debug mode..."
+    gn gen out/debug --args="is_debug=true rtc_include_opus=true rtc_enable_symbol_export=true rtc_build_examples=true rtc_use_speech_audio_devices=false"
+else
+    echo "Generating build files for release mode..."
+    gn gen out/release --args="is_debug=false rtc_include_opus=true rtc_enable_symbol_export=true rtc_build_examples=true rtc_use_speech_audio_devices=false"
+fi
+
+if [ "$BUILD_TYPE" = "debug" ]; then
+    echo "Building in debug mode..."
+    ninja -C out/debug direct_app
+else
+    echo "Building in release mode..."
+    ninja -C out/release direct_app
+fi
+
+echo "Build completed successfully!"
+
+echo "To test the application, you can run:"
+if [ "$BUILD_TYPE" = "debug" ]; then
+    ./out/debug/direct_app --help
+else
+    ./out/release/direct_app --help
+fi 
