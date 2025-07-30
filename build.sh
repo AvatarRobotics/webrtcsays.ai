@@ -1,41 +1,17 @@
 #!/bin/bash
-
-# build-webrtcsays.sh - Build script for WebRTCsays.ai project
-
 set -e
 
-# Function to display usage information
-usage() {
-    echo "Usage: $0 [-d|--debug] [-r|--release] [-h|--help]"
-    echo "  -d, --debug   : Build in debug mode (default)"
-    echo "  -r, --release : Build in release mode"
-    echo "  -h, --help    : Display this help message"
-    exit 1
-}
+# Check if we're already in a git repository, if not, clone it
+echo "Checking for repository..."
+if [ ! -d ".git" ]; then
+    echo "Cloning webrtcsays.ai repository..."
+    git clone https://github.com/AvatarRobotics/webrtcsays.ai.git
+    cd webrtcsays.ai
+else
+    echo "Already in a git repository, skipping clone."
+fi
 
-# Default build type is debug
-BUILD_TYPE="debug"
-
-# Parse command line arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        -d|--debug)
-            BUILD_TYPE="debug"
-            shift
-            ;;
-        -r|--release)
-            BUILD_TYPE="release"
-            shift
-            ;;
-        -h|--help)
-            usage
-            ;;
-        *)
-            echo "Unknown option: $1"
-            usage
-            ;;
-    esac
-done
+#If webrtcsa
 
 echo "Build type: $BUILD_TYPE"
 
@@ -51,43 +27,91 @@ mkdir -p src
 
 echo "Configuring gclient..."
 
-echo "Creating .gclient file in src directory..."
-
+# FIX 1: Create .gclient in ROOT directory (not in src)
+echo "Creating .gclient file in root directory..."
 REMOTE_URL=$(git config --get remote.origin.url)
 
-echo "solutions = [
+cat << EOF > .gclient
+solutions = [
   {
-    'name': 'src',
-    'url': '$REMOTE_URL',
+    "name": "src",
+    "url": "$REMOTE_URL",
     "deps_file": "DEPS",
-    "managed": False,    
-    "custom_deps": {},glcin
+    "managed": False,
+    "custom_deps": {},
   },
 ]
-target_os = ["linux"]" > .gclient
+target_os = ["linux"]
+EOF
 
-gclient config $REMOTE_URL
-
-# Move .gclient to src directory
-echo "Adding .vpython3 and .gclient files in src directory..."
+# FIX 2: Only copy .vpython3 to src (don't move .gclient)
+echo "Adding .vpython3 to src directory..."
 cp .vpython3 src
-cp .gclient src
-
 
 # Step 7: Sync the repository
 echo "Syncing repository with gclient..."
-gclient sync
+gclient sync  # Runs in root where .gclient exists
 
-if [ -d "src" ]; then
-    echo "src directory already exists"
+# Check if src directory exists and has expected content
+if [ -d "src" ] && [ -d "src/build" ] && [ -f "src/.gclient" ]; then
+    echo "Skipping gclient sync: src directory already exists and appears initialized"
 else
-    echo "src directory not created"
-    exit 1
+    echo "Configuring gclient and syncing repository..."
+    # Create .gclient in root
+    echo "Creating .gclient file in root directory..."
+    REMOTE_URL=$(git config --get remote.origin.url)
+
+    cat << EOF > .gclient
+solutions = [
+  {
+    "name": "src",
+    "url": "$REMOTE_URL",
+    "deps_file": "DEPS",
+    "managed": False,
+    "custom_deps": {},
+  },
+]
+target_os = ["linux"]
+EOF
+
+    echo "Adding .vpython3 to src directory..."
+    cp .vpython3 src
+
+    echo "Syncing repository with gclient..."
+    gclient sync
+
+    # Verify critical directories
+    if [ ! -d "src/build" ]; then
+        echo "ERROR: src/build directory missing after sync!"
+        echo "Check gclient sync output for errors"
+        exit 1
+    fi
 fi
 
 cd src
 
-echo "Pulling latest changes from WebRTCsays.ai repository..."
+echo "Pulling latest changes from avatar branch..."
+
+# Ensure we're on the avatar branch
+echo "Switching to avatar branch..."
+git checkout avatar || git checkout -b avatar
+
+# Reset to clean state
+echo "Resetting to clean state..."
+git reset --hard HEAD
+git clean -fd
+
+# Pull latest changes for avatar branch
+echo "Pulling latest changes for avatar branch..."
+git pull origin avatar || {
+    echo "Handling divergent branches..."
+    git fetch origin
+    git reset --hard origin/avatar
+}
+
+# Verify we're on correct commit
+echo "Current commit: $(git rev-parse HEAD)"
+echo "Current branch: $(git branch --show-current)"
 
 if [ "$BUILD_TYPE" = "debug" ]; then
     echo "Generating build files for debug mode..."
@@ -114,9 +138,52 @@ fi
 
 echo "Build completed successfully!"
 
+# Make self-signed cert.pem and key.pem used for encryption option
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -sha256 -days 3650 -nodes -subj "/C=XX/ST=CA/L=SanFrancisco/O=Avatar/OU=Teleop/CN=avatarrobotics.com"
+
+# Make config.json
+cat << EOF > config.json
+{
+    "mode": "callee",
+    "address": "3.93.50.189:3456",
+    "room_name": "room101",
+    "encryption": true,
+    "whisper": false,
+    "llama": false,
+    "video": true,
+    "bonjour": false,
+    "language": "en",
+    "turns": ["turn:3.93.50.189:5349?transport=udp,webrtcsays.ai,wilddolphin"], 
+    "camera": "0,640x480@30",
+}
+EOF
+
 echo "To test the application, you can run:"
 if [ "$BUILD_TYPE" = "debug" ]; then
     ./out/debug/direct_app --help
 else
     ./out/release/direct_app --help
 fi 
+
+# Add cleanup after successful build
+cd ..
+echo "Cleaning up directories except src..."
+for dir in */ ; do
+    if [ "$dir" != "src/" ] ; then
+        rm -rf "$dir"
+    fi
+done
+
+# Replace hardcoded release run with checked general version
+if [ "$BUILD_TYPE" = "debug" ]; then
+  APP_PATH="src/out/debug/direct_app"
+else
+  APP_PATH="src/out/release/direct_app"
+fi
+if [ -f "$APP_PATH" ]; then
+  echo "Starting callee..."
+  ./"$APP_PATH" --config config.json
+else
+  echo "Built app not found at $APP_PATH"
+fi
+

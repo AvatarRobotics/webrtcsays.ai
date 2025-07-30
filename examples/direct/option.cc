@@ -23,6 +23,13 @@
 #include <json/json.h> // Use jsoncpp header
 #include <algorithm>
 
+// Add network includes for MAC address retrieval
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
+#include <cstring>
+#include <cstdio>
+
 // Utility to remove surrounding single or double quotes from a string.
 static std::string stripQuotes(const std::string& s) {
     if (s.size() >= 2) {
@@ -40,6 +47,30 @@ static std::string stripQuotes(const std::string& s) {
 bool ParseIpAndPort(const std::string& ip_port, std::string& ip, int& port);
 // String split
 std::vector<std::string> stringSplit(std::string input, std::string delimiter);
+
+// Add after stringSplit function
+std::string getMacAddress(std::string interface) {
+    if (interface.empty()) interface = "eth0";
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) return "";
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, interface.c_str(), IFNAMSIZ - 1);
+    if (ioctl(sock, SIOCGIFHWADDR, &ifr) < 0) {
+        close(sock);
+        return "";
+    }
+    close(sock);
+    char mac[18];
+    sprintf(mac, "%02X:%02X:%02X:%02X:%02X:%02X",
+        (unsigned char)ifr.ifr_hwaddr.sa_data[0],
+        (unsigned char)ifr.ifr_hwaddr.sa_data[1],
+        (unsigned char)ifr.ifr_hwaddr.sa_data[2],
+        (unsigned char)ifr.ifr_hwaddr.sa_data[3],
+        (unsigned char)ifr.ifr_hwaddr.sa_data[4],
+        (unsigned char)ifr.ifr_hwaddr.sa_data[5]);
+    return std::string(mac);
+}
 
 // Helper function to expand ${HOME} in paths
 namespace {
@@ -511,6 +542,16 @@ Options parseOptions(const std::vector<std::string>& args) {
   // Final check: If mode is still empty after parsing everything, default to caller
   if(opts.mode.empty()) {
       opts.mode = "caller";
+  }
+
+  // Add logic to set user_name to MAC address if empty
+  if (opts.user_name.empty()) {
+      std::string iface = opts.vpn.empty() ? "eth0" : opts.vpn;
+      opts.user_name = getMacAddress(iface);
+      if (opts.user_name.empty()) {
+          opts.user_name = DirectCreateRandomUuid();
+      }
+      RTC_LOG(LS_INFO) << "Set default user_name to: " << opts.user_name;
   }
 
   // Restore environment variable handling
