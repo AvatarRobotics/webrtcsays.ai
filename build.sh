@@ -32,7 +32,7 @@ solutions = [
   {
     "managed": False,
     "name": "src",
-    "url": "git@github.com:ykiryanov/webrtcsays.ai.git",
+    "url": "https://github.com/AvatarRobotics/webrtcsays.ai.git",
     "custom_deps": {},
     "deps_file": "DEPS",
   },
