@@ -56,7 +56,7 @@ rtc::IPAddress IPFromString(absl::string_view str) {
   return ip;
 }
 
-#if LLAMA_NOTIFICATION_ENABLED
+#if defined(WEBRTC_SPEECH_DEVICES) && defined(LLAMA_NOTIFICATION_ENABLED)
 WhillatsLlama* DirectApplication::llama_ = nullptr;
 
 void llamaCallback(bool success, const char* response, void* user_data) {
@@ -89,7 +89,7 @@ void llamaCallback(bool success, const char* response, void* user_data) {
 // DirectApplication Implementation
 DirectApplication::DirectApplication(Options opts)
   : opts_(opts)
-#if LLAMA_NOTIFICATION_ENABLED
+#if defined(WEBRTC_SPEECH_DEVICES) && defined(LLAMA_NOTIFICATION_ENABLED)
     , llamaCallback_(llamaCallback, this)
 #endif
 {
@@ -938,7 +938,9 @@ void DirectApplication::HandleMessage(rtc::AsyncPacketSocket* socket,
              ice_candidates_received_ >= kMaxIceCandidates) {
       SendMessage(Msg::kBye);
     }
-  } else if (message.find("LLAMA:") == 0) {
+  } 
+#if defined(WEBRTC_SPEECH_DEVICES) && defined(LLAMA_NOTIFICATION_ENABLED)
+  else if (message.find("LLAMA:") == 0) {
     std::string payload = message.substr(6);
     std::string language, text;
     std::regex re("^\\[([^\\]]+)\\](.*)$");
@@ -966,7 +968,9 @@ void DirectApplication::HandleMessage(rtc::AsyncPacketSocket* socket,
     }
     RTC_LOG(LS_INFO) << "Whispering: [" << language << "] " << text;
     webrtc::SpeechAudioDeviceFactory::AskLlama(text, language);
-  } else if (message == StatusCodes::kOk) {
+  } 
+#endif // WEBRTC_SPEECH_DEVICES && LLAMA_NOTIFICATION_ENABLED
+  else if (message == StatusCodes::kOk) {
     ShutdownInternal();            // close PeerConnection
 
     if (tcp_socket_) {             // <-- NEW
@@ -1017,12 +1021,13 @@ void DirectApplication::OnAddTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterfa
         auto* video_track = static_cast<webrtc::VideoTrackInterface*>(receiver->track().get());
         
         // Always create video sink for remote video tracks to prevent freezing
+#if defined(WEBRTC_SPEECH_DEVICES) && defined(LLAMA_NOTIFICATION_ENABLED)
         if(!video_sink_) {
           RTC_LOG(LS_INFO) << "Initializing video sink for remote video track...";
           video_sink_ = std::make_unique<webrtc::LlamaVideoRenderer>();
           ((webrtc::LlamaVideoRenderer*)video_sink_.get())->set_is_llama(opts_.llama);
         }
-        
+#endif // WEBRTC_SPEECH_DEVICES && LLAMA_NOTIFICATION_ENABLED
         if (video_sink_) {
             RTC_LOG(LS_INFO) << "Attaching video sink to track: " << receiver->track()->id();
             video_track->AddOrUpdateSink(video_sink_.get(), rtc::VideoSinkWants());
