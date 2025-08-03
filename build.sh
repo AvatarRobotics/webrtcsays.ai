@@ -22,6 +22,7 @@ echo "Current branch: $(git branch --show-current)"
 # Store the current commit hash for comparison
 CURRENT_COMMIT=$(git rev-parse HEAD)
 LAST_BUILD_COMMIT_FILE="last_build_commit.txt"
+ORIGIN_URL=$(git remote get-url origin)
 
 # Create or update .gclient file in the root directory with 'name': 'src'
 cat > .gclient << EOF
@@ -29,7 +30,7 @@ solutions = [
   {
     "managed": False,
     "name": "src",
-    "url": "https://github.com/wilddolphin2022/webrtcsays.ai.git",
+    "url": "$ORIGIN_URL",
     "custom_deps": {},
     "deps_file": "DEPS",
   },
@@ -54,6 +55,9 @@ cp .vpython3 src/ || { echo "WARNING: .vpython3 not found in root, build may fai
 # Navigate to src directory
 cd src
 
+git fetch origin develop 
+git checkout develop 
+
 # Detect platform architecture for sysroot
 ARCH=$(uname -m)
 case "$ARCH" in
@@ -65,16 +69,15 @@ case "$ARCH" in
         ;;
     *)
         echo "Unsupported architecture: $ARCH"
-        exit 1
+        SYSROOT_ARCH=""
         ;;
 esac
 
-# Install sysroot for the detected architecture if the script exists
-if [ -f src/build/linux/sysroot_scripts/install-sysroot.py ]; then
+if [ -n "$SYSROOT_ARCH" ] && [ -f build/linux/sysroot_scripts/install-sysroot.py ]; then
     echo "Installing sysroot for architecture: $SYSROOT_ARCH"
-    python3 src/build/linux/sysroot_scripts/install-sysroot.py --arch=$SYSROOT_ARCH
+    python3 build/linux/sysroot_scripts/install-sysroot.py --arch=$SYSROOT_ARCH
 else
-    echo "Sysroot install script not found. Skipping sysroot installation."
+    echo "Sysroot install script not found or not required for this architecture. Skipping sysroot installation."
 fi
 
 python3 tools/clang/scripts/update.py
