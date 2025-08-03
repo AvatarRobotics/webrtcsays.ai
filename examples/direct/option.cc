@@ -22,6 +22,10 @@
 
 #include <json/json.h> // Use jsoncpp header
 #include <algorithm>
+#include <unordered_set>
+#include <random>
+#include <sstream>
+#include <iomanip>
 
 // Utility to remove surrounding single or double quotes from a string.
 static std::string stripQuotes(const std::string& s) {
@@ -199,6 +203,15 @@ Options parseOptions(const std::vector<std::string>& args) {
       " --whisper_model=/path/to/model.bin --llama_model=/path/to/llama.gguf\n"
       "  direct --mode=caller --user_name=charlie --target_name=alice --room_name=room101 192.168.88.225:3456 --encryption\n"
       ;
+
+  // Set of known options (with and without =)
+  const std::unordered_set<std::string> known_options = {
+    "--config", "--mode", "--encryption", "--no-encryption", "--whisper", "--no-whisper",
+    "--video", "--no-video", "--whisper_model", "--llama_model", "--llava_mmproj",
+    "--webrtc_cert_path", "--webrtc_key_path", "--webrtc_speech_initial_playout_wav",
+    "--llama_llava_yuv", "--turns", "--vpn", "--camera", "--bonjour_name",
+    "--user_name", "--target_name", "--room_name", "--help"
+  };
 
   // --- First pass: check for --config --- 
   for (size_t i = 0; i < args.size(); ++i) { // Use size_t for indexing vector
@@ -498,8 +511,11 @@ Options parseOptions(const std::vector<std::string>& args) {
            opts.mode = (arg.find('.') != std::string::npos) ? "caller" : "callee";
        }
     } else if (arg.rfind("--", 0) == 0) {
-        // Handle unknown flags if necessary, or log a warning
-        RTC_LOG(LS_WARNING) << "Unknown option: " << arg;
+        // Only warn if not a known option
+        std::string opt_name = arg.substr(0, arg.find('=') != std::string::npos ? arg.find('=') : arg.length());
+        if (known_options.find(opt_name) == known_options.end()) {
+            RTC_LOG(LS_WARNING) << "Unknown option: " << arg;
+        }
     } else {
        // Treat as address if not starting with -- and isAddress passed? (Covered above)
        // Or potentially handle positional arguments if needed
@@ -511,6 +527,20 @@ Options parseOptions(const std::vector<std::string>& args) {
   // Final check: If mode is still empty after parsing everything, default to caller
   if(opts.mode.empty()) {
       opts.mode = "caller";
+  }
+
+  // Auto-generate user_name if missing
+  if (opts.user_name.empty()) {
+    static const char* names[] = {"alice", "bob", "carl", "dave", "eve", "frank", "grace", "heidi", "ivan", "judy"};
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> name_dist(0, sizeof(names)/sizeof(names[0]) - 1);
+    std::uniform_int_distribution<> hex_dist(0, 15);
+    std::ostringstream suffix;
+    suffix << "-";
+    for (int i = 0; i < 4; ++i) suffix << std::hex << hex_dist(gen);
+    opts.user_name = std::string(names[name_dist(gen)]) + suffix.str();
+    RTC_LOG(LS_INFO) << "Auto-generated user_name: " << opts.user_name;
   }
 
   // Restore environment variable handling
