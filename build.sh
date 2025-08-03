@@ -83,7 +83,6 @@ fi
 python3 tools/clang/scripts/update.py
 
 # Check if binary already exists and if code has updates
-BINARY_PATH="out/debug/direct_app"
 LAST_BUILD_COMMIT=""
 if [ -f "../$LAST_BUILD_COMMIT_FILE" ]; then
     LAST_BUILD_COMMIT=$(cat ../$LAST_BUILD_COMMIT_FILE)
@@ -124,6 +123,13 @@ if [ $# -ge 2 ]; then
     if [[ "$2" == "speech" || "$2" == "enable_speech" ]]; then
         ENABLE_SPEECH="true"
     fi
+fi
+
+# Set binary path based on build type
+if [ "$BUILD_TYPE" = "debug" ]; then
+    BINARY_PATH="out/debug/direct_app"
+else
+    BINARY_PATH="out/release/direct_app"
 fi
 
 if [ "$BUILD_TYPE" = "debug" ]; then
