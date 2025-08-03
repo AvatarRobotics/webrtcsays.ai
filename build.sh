@@ -109,23 +109,47 @@ else
     echo "Binary at $BINARY_PATH does not exist or is not executable. Skipping cleanup of other directories."
 fi
 
-if [ -f "$BINARY_PATH" ] && [ "$CURRENT_COMMIT" = "$LAST_BUILD_COMMIT" ]; then
-    echo "Binary already exists at $BINARY_PATH and no code updates detected, skipping build..."
-else
-    echo "Building WebRTC project..."
-    # Add your build commands here, e.g.,
-    gn gen out/debug --args="is_debug=true rtc_include_opus=true rtc_enable_symbol_export=true rtc_build_examples=true rtc_use_speech_audio_devices=false"
-    ninja -C out/debug direct_app
-    echo "Build completed."
-    # Store the current commit hash as the last built commit
-    echo "$CURRENT_COMMIT" > ../$LAST_BUILD_COMMIT_FILE
+# Parse script parameters
+BUILD_TYPE="debug"
+ENABLE_SPEECH="false"
+if [ $# -ge 1 ]; then
+    if [[ "$1" == "debug" || "$1" == "release" ]]; then
+        BUILD_TYPE="$1"
+    else
+        echo "Unknown build type: $1. Use 'debug' or 'release'."
+        exit 1
+    fi
+fi
+if [ $# -ge 2 ]; then
+    if [[ "$2" == "speech" || "$2" == "enable_speech" ]]; then
+        ENABLE_SPEECH="true"
+    fi
+fi
 
+if [ "$BUILD_TYPE" = "debug" ]; then
+    echo "Building WebRTC project (debug, speech: $ENABLE_SPEECH)..."
+    gn gen out/debug --args="is_debug=true rtc_include_opus=true rtc_enable_symbol_export=true rtc_build_examples=true rtc_use_speech_audio_devices=$ENABLE_SPEECH"
+    ninja -C out/debug direct_app
+    echo "Debug build completed."
+else
+    echo "Building WebRTC project (release, speech: $ENABLE_SPEECH)..."
+    gn gen out/debug --args="is_debug=false rtc_include_opus=true rtc_enable_symbol_export=true rtc_build_examples=true rtc_use_speech_audio_devices=$ENABLE_SPEECH"
+    ninja -C out/debug direct_app
+    echo "Release build completed."
+fi
+
+# Store the current commit hash as the last built commit
+echo "$CURRENT_COMMIT" > ../$LAST_BUILD_COMMIT_FILE
+
+if [ -f "cert.pem" ] && [ -f "key.pem" ]; then
+    echo "Certificates already exist, skipping creation."
+else
     # Creating certificates
     openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -sha256 -days 3650 -nodes -subj "/C=US/ST=CA/L=SanFrancisco/O=Acme/OU=Development/CN=WebRTCsays.ai"    
 fi
 
-echo "Running binary in callee mode..."
+echo "Running binary to show help..."
 $BINARY_PATH --help
 
-echo "Script execution completed."
-
+#echo "Running binary in callee mode to test signaling..."    
+#$BINARY_PATH --mode=callee  --webrtc_cert_path=cert.pem  --webrtc_key_path=key.pem --user_name=Slim 3.93.50.189:3456
