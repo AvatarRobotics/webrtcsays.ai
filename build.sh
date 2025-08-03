@@ -125,22 +125,31 @@ if [ $# -ge 2 ]; then
     fi
 fi
 
-# Set binary path based on build type
-if [ "$BUILD_TYPE" = "debug" ]; then
-    BINARY_PATH="out/debug/direct_app"
+# Dynamically detect src directory
+if [ -d "src" ]; then
+    SRC_DIR="src"
 else
-    BINARY_PATH="out/release/direct_app"
+    SRC_DIR="."
+fi
+
+# Set binary path and build dir based on build type and SRC_DIR
+if [ "$BUILD_TYPE" = "debug" ]; then
+    BINARY_PATH="$SRC_DIR/out/debug/direct_app"
+    BUILD_DIR="$SRC_DIR/out/debug"
+else
+    BINARY_PATH="$SRC_DIR/out/release/direct_app"
+    BUILD_DIR="$SRC_DIR/out/release"
 fi
 
 if [ "$BUILD_TYPE" = "debug" ]; then
     echo "Building WebRTC project (debug, speech: $ENABLE_SPEECH)..."
-    gn gen out/debug --args="is_debug=true rtc_include_opus=true rtc_enable_symbol_export=true rtc_build_examples=true rtc_use_speech_audio_devices=$ENABLE_SPEECH"
-    ninja -C out/debug direct_app
+    (cd $SRC_DIR && gn gen out/debug --args="is_debug=true rtc_include_opus=true rtc_enable_symbol_export=true rtc_build_examples=true rtc_use_speech_audio_devices=$ENABLE_SPEECH")
+    (cd $SRC_DIR && ninja -C out/$BUILD_TYPE direct_app)
     echo "Debug build completed."
 else
     echo "Building WebRTC project (release, speech: $ENABLE_SPEECH)..."
-    gn gen out/debug --args="is_debug=false rtc_include_opus=true rtc_enable_symbol_export=true rtc_build_examples=true rtc_use_speech_audio_devices=$ENABLE_SPEECH"
-    ninja -C out/debug direct_app
+    (cd $SRC_DIR && gn gen out/release --args="is_debug=false rtc_include_opus=true rtc_enable_symbol_export=true rtc_build_examples=true rtc_use_speech_audio_devices=$ENABLE_SPEECH")
+    (cd $SRC_DIR && ninja -C out/$BUILD_TYPE direct_app)
     echo "Release build completed."
 fi
 
@@ -154,8 +163,12 @@ else
     openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -sha256 -days 3650 -nodes -subj "/C=US/ST=CA/L=SanFrancisco/O=Acme/OU=Development/CN=WebRTCsays.ai"    
 fi
 
-echo "Running binary to show help..."
-$BINARY_PATH --help
+echo "Running binary: $BINARY_PATH"
+if [ -x "$BINARY_PATH" ]; then
+    "$BINARY_PATH"
+else
+    echo "Binary at $BINARY_PATH does not exist or is not executable."
+fi
 
 #echo "Running binary in callee mode to test signaling..."    
 #$BINARY_PATH --mode=callee  --webrtc_cert_path=cert.pem  --webrtc_key_path=key.pem --user_name=Slim 3.93.50.189:3456
