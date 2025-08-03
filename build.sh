@@ -115,13 +115,17 @@ else
     echo "Building WebRTC project..."
     # Add your build commands here, e.g.,
     gn gen out/debug --args="is_debug=true rtc_include_opus=true rtc_enable_symbol_export=true rtc_build_examples=true rtc_use_speech_audio_devices=false"
-    ninja -C out/debug direct
+    ninja -C out/debug direct_app
     echo "Build completed."
     # Store the current commit hash as the last built commit
     echo "$CURRENT_COMMIT" > ../$LAST_BUILD_COMMIT_FILE
+
+    # Creating certificates
+    openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -sha256 -days 3650 -nodes -subj "/C=US/ST=CA/L=SanFrancisco/O=Acme/OU=Development/CN=WebRTCsays.ai"    
 fi
 
-# Run the binary in callee mode
 echo "Running binary in callee mode..."
-$BINARY_PATH --config config.json
+$BINARY_PATH --help
+
+echo "Script execution completed."
 
